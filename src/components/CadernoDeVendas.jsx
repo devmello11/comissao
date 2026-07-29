@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { api, NaoAutenticado } from "../api";
 
 const MESES = [
   "janeiro", "fevereiro", "março", "abril", "maio", "junho",
@@ -31,31 +32,88 @@ export default function CadernoDeVendas() {
   const [metas, setMetas] = useState({});
   const [currentMonth, setCurrentMonth] = useState(ymKey(new Date()));
   const [sortAsc, setSortAsc] = useState(true);
-  const [modalOpen, setModalOpen] = useState(false);
-  const [loaded, setLoaded] = useState(false);
+  const [modal, setModal] = useState(null); // null | { mode: "add" } | { mode: "edit", venda }
+  const [sessao, setSessao] = useState("verificando"); // verificando | login | pronto
+  const [erro, setErro] = useState("");
+  const [ocupado, setOcupado] = useState(false);
+  const [dadosLocais, setDadosLocais] = useState(null); // dados antigos do localStorage a migrar
+  const fileInputRef = useRef(null);
+
+  async function carregar() {
+    try {
+      const dados = await api.carregarTudo();
+      setVendas(dados.vendas);
+      setMetas(dados.metas);
+      setSessao("pronto");
+      setErro("");
+      if (dados.vendas.length === 0) verificarDadosLocais();
+    } catch (e) {
+      if (e instanceof NaoAutenticado) {
+        setSessao("login");
+      } else {
+        setSessao("pronto");
+        setErro(e.message);
+      }
+    }
+  }
 
   useEffect(() => {
-    try {
-      const v = localStorage.getItem("caderno_vendas");
-      const m = localStorage.getItem("caderno_metas");
-      if (v) setVendas(JSON.parse(v));
-      if (m) setMetas(JSON.parse(m));
-    } catch (e) {
-      console.error("Erro ao carregar dados salvos", e);
-    } finally {
-      setLoaded(true);
-    }
+    carregar();
   }, []);
 
-  useEffect(() => {
-    if (!loaded) return;
-    localStorage.setItem("caderno_vendas", JSON.stringify(vendas));
-  }, [vendas, loaded]);
+  /** Vendas salvas na versão antiga (localStorage) podem ser enviadas para o banco. */
+  function verificarDadosLocais() {
+    try {
+      const v = JSON.parse(localStorage.getItem("caderno_vendas") || "[]");
+      const m = JSON.parse(localStorage.getItem("caderno_metas") || "{}");
+      if (Array.isArray(v) && v.length > 0) setDadosLocais({ vendas: v, metas: m });
+    } catch {
+      /* ignora localStorage corrompido */
+    }
+  }
 
-  useEffect(() => {
-    if (!loaded) return;
-    localStorage.setItem("caderno_metas", JSON.stringify(metas));
-  }, [metas, loaded]);
+  async function migrarDadosLocais() {
+    await comApi(async () => {
+      const salvos = await api.substituirTudo(dadosLocais.vendas, dadosLocais.metas);
+      setVendas(salvos.vendas);
+      setMetas(salvos.metas);
+      localStorage.removeItem("caderno_vendas");
+      localStorage.removeItem("caderno_metas");
+      setDadosLocais(null);
+    });
+  }
+
+  function descartarDadosLocais() {
+    localStorage.removeItem("caderno_vendas");
+    localStorage.removeItem("caderno_metas");
+    setDadosLocais(null);
+  }
+
+  /** Executa uma chamada de API tratando "ocupado", erro e sessão expirada. */
+  async function comApi(fn) {
+    setOcupado(true);
+    setErro("");
+    try {
+      await fn();
+      return true;
+    } catch (e) {
+      if (e instanceof NaoAutenticado) {
+        setSessao("login");
+      } else {
+        setErro(e.message);
+      }
+      return false;
+    } finally {
+      setOcupado(false);
+    }
+  }
+
+  async function sair() {
+    await api.logout().catch(() => {});
+    setVendas([]);
+    setMetas({});
+    setSessao("login");
+  }
 
   const list = useMemo(() => {
     const filtered = vendas.filter((v) => v.date.slice(0, 7) === currentMonth);
@@ -70,29 +128,102 @@ export default function CadernoDeVendas() {
   const pct = meta > 0 ? Math.min(100, (totalBruto / meta) * 100) : 0;
   const hit = meta > 0 && totalBruto >= meta;
 
-  function addVenda({ date, description, value }) {
-    setVendas((prev) => [
-      ...prev,
-      { id: Date.now() + "-" + Math.random().toString(36).slice(2, 7), date, description, value },
-    ]);
-    setCurrentMonth(date.slice(0, 7));
-    setModalOpen(false);
+  async function addVenda(dados) {
+    const ok = await comApi(async () => {
+      const criada = await api.criarVenda(dados);
+      setVendas((prev) => [...prev, criada]);
+      setCurrentMonth(criada.date.slice(0, 7));
+    });
+    if (ok) setModal(null);
   }
 
-  function deleteVenda(id) {
-    setVendas((prev) => prev.filter((v) => v.id !== id));
+  async function updateVenda(id, dados) {
+    const ok = await comApi(async () => {
+      const atualizada = await api.atualizarVenda(id, dados);
+      setVendas((prev) => prev.map((v) => (v.id === id ? atualizada : v)));
+      setCurrentMonth(atualizada.date.slice(0, 7));
+    });
+    if (ok) setModal(null);
   }
 
-  function updateMeta(value) {
-    setMetas((prev) => ({ ...prev, [currentMonth]: value }));
+  async function deleteVenda(id) {
+    await comApi(async () => {
+      await api.excluirVenda(id);
+      setVendas((prev) => prev.filter((v) => v.id !== id));
+    });
   }
 
-  if (!loaded) {
+  async function updateMeta(valor) {
+    const mes = currentMonth;
+    if ((metas[mes] || 0) === valor) return;
+    await comApi(async () => {
+      await api.salvarMeta(mes, valor);
+      setMetas((prev) => {
+        const proximo = { ...prev };
+        if (valor > 0) proximo[mes] = valor;
+        else delete proximo[mes];
+        return proximo;
+      });
+    });
+  }
+
+  function exportBackup() {
+    const data = { vendas, metas, exportedAt: new Date().toISOString() };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `backup-vendas-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function triggerImport() {
+    fileInputRef.current?.click();
+  }
+
+  function handleImportFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed;
+      try {
+        parsed = JSON.parse(reader.result);
+        if (!Array.isArray(parsed.vendas) || typeof parsed.metas !== "object") {
+          throw new Error("formato inválido");
+        }
+      } catch {
+        alert("Não foi possível importar esse arquivo. Verifique se é um backup válido.");
+        return;
+      }
+      const ok = window.confirm(
+        "Isso vai substituir todos os dados do banco pelos dados desse backup. Deseja continuar?"
+      );
+      if (!ok) return;
+      comApi(async () => {
+        const salvos = await api.substituirTudo(parsed.vendas, parsed.metas);
+        setVendas(salvos.vendas);
+        setMetas(salvos.metas);
+        if (salvos.ignoradas > 0) {
+          alert(`${salvos.ignoradas} venda(s) do arquivo foram ignoradas por estarem inválidas.`);
+        }
+      });
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  }
+
+  if (sessao === "verificando") {
     return (
       <div className="max-w-3xl mx-auto py-16 text-center text-inkSoft font-sans text-sm">
         Carregando seu caderno de vendas…
       </div>
     );
+  }
+
+  if (sessao === "login") {
+    return <TelaLogin onEntrar={carregar} />;
   }
 
   return (
@@ -102,7 +233,49 @@ export default function CadernoDeVendas() {
           currentMonth={currentMonth}
           onPrev={() => setCurrentMonth(shiftMonth(currentMonth, -1))}
           onNext={() => setCurrentMonth(shiftMonth(currentMonth, 1))}
+          onExport={exportBackup}
+          onImportClick={triggerImport}
+          onSair={sair}
+          ocupado={ocupado}
         />
+        <input
+          type="file"
+          accept="application/json"
+          ref={fileInputRef}
+          onChange={handleImportFile}
+          className="hidden"
+        />
+        {erro && (
+          <div className="mb-4 rounded-lg border border-redStamp/40 bg-[#FBEAE7] px-4 py-2.5 text-sm text-redStamp flex items-center justify-between gap-3">
+            <span>Não foi possível salvar: {erro}</span>
+            <button onClick={() => carregar()} className="font-semibold underline whitespace-nowrap">
+              Recarregar
+            </button>
+          </div>
+        )}
+        {dadosLocais && (
+          <div className="mb-4 rounded-lg border border-gold bg-[#FDF6E3] px-4 py-3 text-sm">
+            <p className="mb-2">
+              Encontramos {dadosLocais.vendas.length} venda(s) salvas neste navegador na versão
+              antiga. Quer enviá-las para o banco de dados?
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={migrarDadosLocais}
+                disabled={ocupado}
+                className="bg-ink text-paper text-xs font-semibold rounded-lg px-3 py-1.5 hover:bg-[#142A20] disabled:opacity-50"
+              >
+                Enviar para o banco
+              </button>
+              <button
+                onClick={descartarDadosLocais}
+                className="text-xs font-semibold rounded-lg px-3 py-1.5 border border-cardBorder hover:bg-paperStripe"
+              >
+                Descartar
+              </button>
+            </div>
+          </div>
+        )}
         <Stats
           totalBruto={totalBruto}
           comissao={comissao}
@@ -115,7 +288,7 @@ export default function CadernoDeVendas() {
         <div className="flex items-center justify-between mb-2.5">
           <h2 className="font-serif font-semibold text-base m-0">Vendas do mês</h2>
           <button
-            onClick={() => setModalOpen(true)}
+            onClick={() => setModal({ mode: "add" })}
             className="bg-ink text-paper text-sm font-semibold rounded-lg px-4 py-2 hover:bg-[#142A20] transition-colors"
           >
             + Nova venda
@@ -125,49 +298,132 @@ export default function CadernoDeVendas() {
           list={list}
           sortAsc={sortAsc}
           onToggleSort={() => setSortAsc((s) => !s)}
+          onEdit={(venda) => setModal({ mode: "edit", venda })}
           onDelete={deleteVenda}
-          onAddEmpty={() => setModalOpen(true)}
+          onAddEmpty={() => setModal({ mode: "add" })}
           monthLabel={monthLabel(currentMonth)}
         />
       </div>
-      {modalOpen && (
-        <AddVendaModal
+      {modal && (
+        <VendaModal
+          key={modal.mode === "edit" ? modal.venda.id : "add"}
+          venda={modal.mode === "edit" ? modal.venda : null}
           currentMonth={currentMonth}
-          onCancel={() => setModalOpen(false)}
-          onSave={addVenda}
+          onCancel={() => setModal(null)}
+          onSave={(dados) =>
+            modal.mode === "edit" ? updateVenda(modal.venda.id, dados) : addVenda(dados)
+          }
         />
       )}
     </div>
   );
 }
 
-function Masthead({ currentMonth, onPrev, onNext }) {
+function TelaLogin({ onEntrar }) {
+  const [senha, setSenha] = useState("");
+  const [erro, setErro] = useState("");
+  const [enviando, setEnviando] = useState(false);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setEnviando(true);
+    setErro("");
+    try {
+      await api.login(senha);
+      await onEntrar();
+    } catch (err) {
+      setErro(
+        err.message === "senha_incorreta"
+          ? "Senha incorreta."
+          : "Não foi possível entrar: " + err.message
+      );
+      setEnviando(false);
+    }
+  }
+
+  return (
+    <div className="min-h-screen bg-paper font-sans text-ink flex items-center justify-center p-5">
+      <form
+        onSubmit={handleSubmit}
+        className="bg-white border border-cardBorder rounded-xl w-full max-w-sm p-6 shadow-sm"
+      >
+        <h1 className="font-serif font-semibold text-2xl tracking-tight m-0">Caderno de vendas</h1>
+        <p className="text-xs text-inkSoft uppercase tracking-wide mt-1 mb-5">Acesso restrito</p>
+        <label className="block text-xs uppercase tracking-wide text-inkSoft mb-1.5">Senha</label>
+        <input
+          type="password"
+          value={senha}
+          onChange={(e) => setSenha(e.target.value)}
+          autoFocus
+          required
+          className="w-full font-mono text-sm px-2.5 py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
+        />
+        {erro && <p className="text-xs text-redStamp mt-2">{erro}</p>}
+        <button
+          type="submit"
+          disabled={enviando}
+          className="w-full mt-4 text-sm font-semibold px-4 py-2 rounded-lg bg-ink text-paper border border-ink hover:bg-[#142A20] disabled:opacity-50"
+        >
+          {enviando ? "Entrando…" : "Entrar"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function Masthead({ currentMonth, onPrev, onNext, onExport, onImportClick, onSair, ocupado }) {
   return (
     <div className="flex items-end justify-between gap-4 border-b-2 border-ink pb-3.5 mb-5 flex-wrap">
       <div>
         <h1 className="font-serif font-semibold text-3xl tracking-tight m-0">Caderno de vendas</h1>
         <p className="text-xs text-inkSoft uppercase tracking-wide mt-1">
           Registro mensal &middot; comissão de {(COMISSAO_TAXA * 100).toFixed(0)}%
+          {ocupado && <span className="ml-2 normal-case tracking-normal">salvando…</span>}
         </p>
       </div>
-      <div className="flex items-center gap-2.5 font-mono">
-        <button
-          onClick={onPrev}
-          aria-label="Mês anterior"
-          className="w-8 h-8 rounded-md border border-cardBorder hover:bg-paperStripe hover:border-inkFaint flex items-center justify-center text-ink"
-        >
-          ‹
-        </button>
-        <span className="text-sm font-semibold min-w-[128px] text-center capitalize">
-          {monthLabel(currentMonth)}
-        </span>
-        <button
-          onClick={onNext}
-          aria-label="Próximo mês"
-          className="w-8 h-8 rounded-md border border-cardBorder hover:bg-paperStripe hover:border-inkFaint flex items-center justify-center text-ink"
-        >
-          ›
-        </button>
+      <div className="flex flex-col items-end gap-1.5">
+        <div className="flex items-center gap-2.5 font-mono">
+          <button
+            onClick={onPrev}
+            aria-label="Mês anterior"
+            className="w-8 h-8 rounded-md border border-cardBorder hover:bg-paperStripe hover:border-inkFaint flex items-center justify-center text-ink"
+          >
+            ‹
+          </button>
+          <span className="text-sm font-semibold min-w-[128px] text-center capitalize">
+            {monthLabel(currentMonth)}
+          </span>
+          <button
+            onClick={onNext}
+            aria-label="Próximo mês"
+            className="w-8 h-8 rounded-md border border-cardBorder hover:bg-paperStripe hover:border-inkFaint flex items-center justify-center text-ink"
+          >
+            ›
+          </button>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onExport}
+            title="Baixar um arquivo .json com todas as vendas e metas"
+            className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-cardBorder text-ink hover:bg-paperStripe hover:border-inkFaint"
+          >
+            ↓ Exportar JSON
+          </button>
+          <button
+            onClick={onImportClick}
+            title="Carregar um arquivo .json exportado anteriormente"
+            className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-cardBorder text-inkSoft hover:bg-paperStripe hover:border-inkFaint hover:text-ink"
+          >
+            ↑ Importar JSON
+          </button>
+          <button
+            onClick={onSair}
+            title="Sair"
+            className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-cardBorder text-inkSoft hover:bg-paperStripe hover:border-inkFaint hover:text-ink"
+          >
+            Sair
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -236,7 +492,7 @@ function Stats({ totalBruto, comissao, count, meta, pct, hit, onMetaChange }) {
   );
 }
 
-function Ledger({ list, sortAsc, onToggleSort, onDelete, onAddEmpty, monthLabel }) {
+function Ledger({ list, sortAsc, onToggleSort, onEdit, onDelete, onAddEmpty, monthLabel }) {
   return (
     <div className="bg-white border border-cardBorder rounded-[10px] shadow-sm overflow-hidden">
       {list.length === 0 ? (
@@ -287,10 +543,19 @@ function Ledger({ list, sortAsc, onToggleSort, onDelete, onAddEmpty, monthLabel 
                 <td className="font-mono text-right text-sm text-goldDeep px-3.5 py-2.5 border-b border-paperLine">
                   {fmtMoney(v.value * COMISSAO_TAXA)}
                 </td>
-                <td className="text-right px-3.5 py-2.5 border-b border-paperLine">
+                <td className="text-right whitespace-nowrap px-3.5 py-2.5 border-b border-paperLine">
+                  <button
+                    onClick={() => onEdit(v)}
+                    aria-label="Editar venda"
+                    title="Editar venda"
+                    className="text-inkFaint hover:text-ink hover:bg-paperStripe rounded px-1.5 text-sm"
+                  >
+                    ✎
+                  </button>
                   <button
                     onClick={() => onDelete(v.id)}
                     aria-label="Excluir venda"
+                    title="Excluir venda"
                     className="text-inkFaint hover:text-redStamp hover:bg-[#FBEAE7] rounded px-1.5 text-base"
                   >
                     ×
@@ -305,18 +570,22 @@ function Ledger({ list, sortAsc, onToggleSort, onDelete, onAddEmpty, monthLabel 
   );
 }
 
-function AddVendaModal({ currentMonth, onCancel, onSave }) {
+function VendaModal({ venda, currentMonth, onCancel, onSave }) {
+  const editando = Boolean(venda);
   const today = new Date();
   const defaultDate = ymKey(today) === currentMonth ? today.toISOString().slice(0, 10) : `${currentMonth}-01`;
-  const [date, setDate] = useState(defaultDate);
-  const [description, setDescription] = useState("");
-  const [valor, setValor] = useState("");
+  const [date, setDate] = useState(venda ? venda.date : defaultDate);
+  const [description, setDescription] = useState(venda ? venda.description || "" : "");
+  const [valor, setValor] = useState(venda ? String(venda.value) : "");
+  const [enviando, setEnviando] = useState(false);
 
-  function handleSubmit(e) {
+  async function handleSubmit(e) {
     e.preventDefault();
     const value = parseFloat(valor);
     if (!date || isNaN(value) || value <= 0) return;
-    onSave({ date, description: description.trim(), value });
+    setEnviando(true);
+    await onSave({ date, description: description.trim(), value });
+    setEnviando(false);
   }
 
   return (
@@ -325,7 +594,9 @@ function AddVendaModal({ currentMonth, onCancel, onSave }) {
       onClick={(e) => e.target === e.currentTarget && onCancel()}
     >
       <div className="bg-paper border border-cardBorder rounded-xl w-full max-w-sm p-6 shadow-xl">
-        <h3 className="font-serif font-semibold text-lg mb-4">Nova venda</h3>
+        <h3 className="font-serif font-semibold text-lg mb-4">
+          {editando ? "Editar venda" : "Nova venda"}
+        </h3>
         <form onSubmit={handleSubmit}>
           <div className="mb-3.5">
             <label className="block text-xs uppercase tracking-wide text-inkSoft mb-1.5">Data</label>
@@ -371,9 +642,10 @@ function AddVendaModal({ currentMonth, onCancel, onSave }) {
             </button>
             <button
               type="submit"
-              className="text-sm font-semibold px-4 py-2 rounded-lg bg-ink text-paper border border-ink hover:bg-[#142A20]"
+              disabled={enviando}
+              className="text-sm font-semibold px-4 py-2 rounded-lg bg-ink text-paper border border-ink hover:bg-[#142A20] disabled:opacity-50"
             >
-              Salvar venda
+              {enviando ? "Salvando…" : editando ? "Salvar alterações" : "Salvar venda"}
             </button>
           </div>
         </form>
