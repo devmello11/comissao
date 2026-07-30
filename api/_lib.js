@@ -36,6 +36,12 @@ export function garantirSchema() {
         created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `;
+    // Gorjeta/comissão extra da venda. Coluna adicionada depois — o ADD COLUMN
+    // IF NOT EXISTS mantém compatível quem já tinha a tabela criada sem ela.
+    await sql`
+      ALTER TABLE vendas
+      ADD COLUMN IF NOT EXISTS bonus NUMERIC(12, 2) NOT NULL DEFAULT 0
+    `;
     await sql`
       CREATE TABLE IF NOT EXISTS metas (
         mes   TEXT PRIMARY KEY,
@@ -133,6 +139,7 @@ export function normalizaVenda(row) {
     date: row.date,
     description: row.description || "",
     value: Number(row.value),
+    bonus: Number(row.bonus || 0),
   };
 }
 
@@ -146,6 +153,11 @@ export function validaVenda(body) {
   if (!Number.isFinite(value) || value <= 0) {
     return { ok: false, erro: "valor_invalido" };
   }
+  // Gorjeta é opcional: ausente vale 0. Só não pode ser negativa.
+  const bonus = body?.bonus === "" || body?.bonus == null ? 0 : Number(body.bonus);
+  if (!Number.isFinite(bonus) || bonus < 0) {
+    return { ok: false, erro: "gorjeta_invalida" };
+  }
   const description = String(body?.description || "").slice(0, 300);
-  return { ok: true, dados: { date, description, value } };
+  return { ok: true, dados: { date, description, value, bonus } };
 }

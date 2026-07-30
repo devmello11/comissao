@@ -7,10 +7,12 @@ entrar com a senha.
 ## Funcionalidades
 
 - Botão **+ Nova venda** para registrar data, descrição (opcional) e valor.
-- Botão **✎ Editar** em cada linha para corrigir data, descrição ou valor de uma venda já lançada.
+- Botão **+ Adicionar gorjeta / comissão extra** dentro da venda: o valor informado entra
+  **integral na comissão**, sem contar no total bruto nem na meta.
+- Botão **✎ Editar** em cada linha para corrigir data, descrição, valor ou gorjeta de uma venda já lançada.
 - Botão **×** para excluir.
 - Tabela ordenada por data (clique no cabeçalho "Data" para inverter a ordem).
-- Cálculo automático do **total bruto** e da **comissão de 3%** do mês.
+- Cálculo automático do **total bruto** e da **comissão de 3% + gorjetas** do mês.
 - **Meta mensal** editável, com barra de progresso e selo quando a meta é batida.
 - Navegação entre meses pelas setas ao lado do nome do mês.
 - **Exportar JSON** (backup completo em arquivo) e **Importar JSON** (substitui os dados do banco).

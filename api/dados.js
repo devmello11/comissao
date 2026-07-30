@@ -16,7 +16,7 @@ export default handler(async (req, res) => {
   // GET: carrega tudo de uma vez (usado na abertura do app).
   if (req.method === "GET") {
     const [vendas, metas] = await Promise.all([
-      sql`SELECT id, date, description, value FROM vendas ORDER BY date ASC`,
+      sql`SELECT id, date, description, value, bonus FROM vendas ORDER BY date ASC`,
       sql`SELECT mes, valor FROM metas`,
     ]);
     res.status(200).json({
@@ -51,8 +51,8 @@ export default handler(async (req, res) => {
       sql`DELETE FROM metas`,
       ...vendas.map(
         (v) => sql`
-          INSERT INTO vendas (id, date, description, value)
-          VALUES (${v.id}, ${v.date}, ${v.description}, ${v.value})
+          INSERT INTO vendas (id, date, description, value, bonus)
+          VALUES (${v.id}, ${v.date}, ${v.description}, ${v.value}, ${v.bonus})
           ON CONFLICT (id) DO NOTHING
         `
       ),

@@ -14,7 +14,7 @@ export default handler(async (req, res) => {
   const sql = getSql();
 
   if (req.method === "GET") {
-    const rows = await sql`SELECT id, date, description, value FROM vendas ORDER BY date ASC`;
+    const rows = await sql`SELECT id, date, description, value, bonus FROM vendas ORDER BY date ASC`;
     res.status(200).json(rows.map(normalizaVenda));
     return;
   }
@@ -27,9 +27,9 @@ export default handler(async (req, res) => {
     }
     const id = crypto.randomUUID();
     const [row] = await sql`
-      INSERT INTO vendas (id, date, description, value)
-      VALUES (${id}, ${dados.date}, ${dados.description}, ${dados.value})
-      RETURNING id, date, description, value
+      INSERT INTO vendas (id, date, description, value, bonus)
+      VALUES (${id}, ${dados.date}, ${dados.description}, ${dados.value}, ${dados.bonus})
+      RETURNING id, date, description, value, bonus
     `;
     res.status(201).json(normalizaVenda(row));
     return;

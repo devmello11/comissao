@@ -26,6 +26,10 @@ function shiftMonth(key, delta) {
   const d = new Date(y, m - 1 + delta, 1);
   return ymKey(d);
 }
+/** Comissão da venda: a taxa sobre o valor + a gorjeta, que entra integral. */
+function comissaoDe(v) {
+  return v.value * COMISSAO_TAXA + (v.bonus || 0);
+}
 
 export default function CadernoDeVendas() {
   const [vendas, setVendas] = useState([]);
@@ -123,7 +127,8 @@ export default function CadernoDeVendas() {
   }, [vendas, currentMonth, sortAsc]);
 
   const totalBruto = useMemo(() => list.reduce((s, v) => s + v.value, 0), [list]);
-  const comissao = totalBruto * COMISSAO_TAXA;
+  const totalGorjetas = useMemo(() => list.reduce((s, v) => s + (v.bonus || 0), 0), [list]);
+  const comissao = totalBruto * COMISSAO_TAXA + totalGorjetas;
   const meta = metas[currentMonth] || 0;
   const pct = meta > 0 ? Math.min(100, (totalBruto / meta) * 100) : 0;
   const hit = meta > 0 && totalBruto >= meta;
@@ -279,6 +284,7 @@ export default function CadernoDeVendas() {
         <Stats
           totalBruto={totalBruto}
           comissao={comissao}
+          totalGorjetas={totalGorjetas}
           count={list.length}
           meta={meta}
           pct={pct}
@@ -429,7 +435,7 @@ function Masthead({ currentMonth, onPrev, onNext, onExport, onImportClick, onSai
   );
 }
 
-function Stats({ totalBruto, comissao, count, meta, pct, hit, onMetaChange }) {
+function Stats({ totalBruto, comissao, totalGorjetas, count, meta, pct, hit, onMetaChange }) {
   const [metaDraft, setMetaDraft] = useState(meta || "");
 
   useEffect(() => {
@@ -456,7 +462,11 @@ function Stats({ totalBruto, comissao, count, meta, pct, hit, onMetaChange }) {
           Comissão ({(COMISSAO_TAXA * 100).toFixed(0)}%)
         </p>
         <p className="font-mono text-xl font-semibold text-goldDeep">{fmtMoney(comissao)}</p>
-        <p className="text-[11px] text-inkFaint mt-1">sobre o total bruto</p>
+        <p className="text-[11px] text-inkFaint mt-1">
+          {totalGorjetas > 0
+            ? `${fmtMoney(totalBruto * COMISSAO_TAXA)} do bruto + ${fmtMoney(totalGorjetas)} em gorjetas`
+            : "sobre o total bruto"}
+        </p>
       </div>
 
       <div className="relative bg-white border border-cardBorder rounded-[10px] p-4 shadow-sm overflow-hidden">
@@ -536,12 +546,22 @@ function Ledger({ list, sortAsc, onToggleSort, onEdit, onDelete, onAddEmpty, mon
                 </td>
                 <td className="hidden sm:table-cell text-sm text-inkSoft px-3.5 py-2.5 border-b border-paperLine">
                   {v.description || "—"}
+                  {v.bonus > 0 && (
+                    <span className="ml-1.5 font-mono text-[10px] uppercase tracking-wide text-goldDeep border border-gold rounded px-1 py-0.5 whitespace-nowrap">
+                      gorjeta {fmtMoney(v.bonus)}
+                    </span>
+                  )}
                 </td>
                 <td className="font-mono text-right text-sm px-3.5 py-2.5 border-b border-paperLine">
                   {fmtMoney(v.value)}
                 </td>
                 <td className="font-mono text-right text-sm text-goldDeep px-3.5 py-2.5 border-b border-paperLine">
-                  {fmtMoney(v.value * COMISSAO_TAXA)}
+                  {fmtMoney(comissaoDe(v))}
+                  {v.bonus > 0 && (
+                    <span className="block text-[10px] text-inkFaint sm:hidden">
+                      inclui {fmtMoney(v.bonus)} de gorjeta
+                    </span>
+                  )}
                 </td>
                 <td className="text-right whitespace-nowrap px-3.5 py-2.5 border-b border-paperLine">
                   <button
@@ -577,14 +597,21 @@ function VendaModal({ venda, currentMonth, onCancel, onSave }) {
   const [date, setDate] = useState(venda ? venda.date : defaultDate);
   const [description, setDescription] = useState(venda ? venda.description || "" : "");
   const [valor, setValor] = useState(venda ? String(venda.value) : "");
+  const [gorjeta, setGorjeta] = useState(venda?.bonus ? String(venda.bonus) : "");
+  // O campo de gorjeta fica escondido até o usuário pedir — na maioria das vendas não tem.
+  const [mostraGorjeta, setMostraGorjeta] = useState(Boolean(venda?.bonus));
   const [enviando, setEnviando] = useState(false);
+
+  const bonus = mostraGorjeta ? parseFloat(gorjeta) || 0 : 0;
+  const value = parseFloat(valor);
+  const comissaoPrevia = (isNaN(value) ? 0 : value) * COMISSAO_TAXA + bonus;
 
   async function handleSubmit(e) {
     e.preventDefault();
-    const value = parseFloat(valor);
     if (!date || isNaN(value) || value <= 0) return;
+    if (bonus < 0) return;
     setEnviando(true);
-    await onSave({ date, description: description.trim(), value });
+    await onSave({ date, description: description.trim(), value, bonus });
     setEnviando(false);
   }
 
@@ -632,6 +659,59 @@ function VendaModal({ venda, currentMonth, onCancel, onSave }) {
               className="w-full font-mono text-sm pl-9 pr-2.5 py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
             />
           </div>
+
+          {mostraGorjeta ? (
+            <div className="mb-3.5 relative">
+              <div className="flex items-baseline justify-between mb-1.5">
+                <label className="block text-xs uppercase tracking-wide text-inkSoft">
+                  Gorjeta / comissão extra
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMostraGorjeta(false);
+                    setGorjeta("");
+                  }}
+                  className="text-[11px] font-semibold text-inkFaint hover:text-redStamp"
+                >
+                  remover
+                </button>
+              </div>
+              <span className="absolute left-2.5 top-[34px] font-mono text-sm text-inkSoft">R$</span>
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                inputMode="decimal"
+                value={gorjeta}
+                onChange={(e) => setGorjeta(e.target.value)}
+                placeholder="0,00"
+                autoFocus
+                className="w-full font-mono text-sm pl-9 pr-2.5 py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
+              />
+              <p className="text-[11px] text-inkFaint mt-1">
+                Entra 100% na comissão, sem contar no total bruto nem na meta.
+              </p>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setMostraGorjeta(true)}
+              className="w-full mb-3.5 text-xs font-semibold px-3 py-2 rounded-lg border border-dashed border-gold text-goldDeep hover:bg-[#FDF6E3]"
+            >
+              + Adicionar gorjeta / comissão extra
+            </button>
+          )}
+
+          <div className="rounded-lg bg-paperStripe border border-cardBorder px-3 py-2 flex items-baseline justify-between">
+            <span className="text-[11px] uppercase tracking-wide text-inkSoft">
+              Comissão desta venda
+            </span>
+            <span className="font-mono text-sm font-semibold text-goldDeep">
+              {fmtMoney(comissaoPrevia)}
+            </span>
+          </div>
+
           <div className="flex justify-end gap-2 mt-4">
             <button
               type="button"
