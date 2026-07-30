@@ -30,6 +30,26 @@ function shiftMonth(key, delta) {
 function comissaoDe(v) {
   return v.value * COMISSAO_TAXA + (v.bonus || 0);
 }
+/** Tira acento e caixa pra "balcao" achar "Balcão". */
+function normaliza(s) {
+  return String(s || "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+}
+/** Aceita "1.234,50" e "1234.50" — o teclado do celular manda vírgula. */
+function paraNumero(s) {
+  const txt = String(s ?? "").trim();
+  if (!txt) return null;
+  // Com vírgula, o ponto é milhar. Sem vírgula, só é milhar se vier em grupos de 3
+  // dígitos ("1.234" = 1234), senão é decimal ("1234.50" = 1234,5).
+  const ehMilhar = txt.includes(",") || /^\d{1,3}(\.\d{3})+$/.test(txt);
+  const limpo = ehMilhar ? txt.replace(/\./g, "").replace(",", ".") : txt;
+  const n = parseFloat(limpo);
+  return Number.isFinite(n) ? n : null;
+}
+
+const FILTROS_VAZIOS = { busca: "", valorMin: "", valorMax: "", soGorjeta: false };
 
 export default function CadernoDeVendas() {
   const [vendas, setVendas] = useState([]);
@@ -41,6 +61,7 @@ export default function CadernoDeVendas() {
   const [erro, setErro] = useState("");
   const [ocupado, setOcupado] = useState(false);
   const [dadosLocais, setDadosLocais] = useState(null); // dados antigos do localStorage a migrar
+  const [filtros, setFiltros] = useState(FILTROS_VAZIOS);
   const fileInputRef = useRef(null);
 
   async function carregar() {
@@ -119,15 +140,48 @@ export default function CadernoDeVendas() {
     setSessao("login");
   }
 
-  const list = useMemo(() => {
-    const filtered = vendas.filter((v) => v.date.slice(0, 7) === currentMonth);
-    filtered.sort((a, b) => (a.date === b.date ? 0 : a.date < b.date ? -1 : 1));
-    if (!sortAsc) filtered.reverse();
-    return filtered;
-  }, [vendas, currentMonth, sortAsc]);
+  // Tudo do mês: alimenta os cards de resumo e a meta, que não devem mudar com filtro.
+  const doMes = useMemo(
+    () => vendas.filter((v) => v.date.slice(0, 7) === currentMonth),
+    [vendas, currentMonth]
+  );
 
-  const totalBruto = useMemo(() => list.reduce((s, v) => s + v.value, 0), [list]);
-  const totalGorjetas = useMemo(() => list.reduce((s, v) => s + (v.bonus || 0), 0), [list]);
+  // O que a tabela mostra: o mês já filtrado e ordenado.
+  const list = useMemo(() => {
+    const busca = normaliza(filtros.busca).trim();
+    const min = paraNumero(filtros.valorMin);
+    const max = paraNumero(filtros.valorMax);
+
+    const filtrado = doMes.filter((v) => {
+      if (busca && !normaliza(v.description).includes(busca)) return false;
+      if (min !== null && v.value < min) return false;
+      if (max !== null && v.value > max) return false;
+      if (filtros.soGorjeta && !(v.bonus > 0)) return false;
+      return true;
+    });
+
+    filtrado.sort((a, b) => (a.date === b.date ? 0 : a.date < b.date ? -1 : 1));
+    if (!sortAsc) filtrado.reverse();
+    return filtrado;
+  }, [doMes, filtros, sortAsc]);
+
+  const filtroAtivo =
+    filtros.busca.trim() !== "" ||
+    filtros.valorMin.trim() !== "" ||
+    filtros.valorMax.trim() !== "" ||
+    filtros.soGorjeta;
+
+  // Subtotal do que está filtrado, pra responder "quanto deu só esse recorte".
+  const subtotal = useMemo(
+    () => ({
+      bruto: list.reduce((s, v) => s + v.value, 0),
+      comissao: list.reduce((s, v) => s + comissaoDe(v), 0),
+    }),
+    [list]
+  );
+
+  const totalBruto = useMemo(() => doMes.reduce((s, v) => s + v.value, 0), [doMes]);
+  const totalGorjetas = useMemo(() => doMes.reduce((s, v) => s + (v.bonus || 0), 0), [doMes]);
   const comissao = totalBruto * COMISSAO_TAXA + totalGorjetas;
   const meta = metas[currentMonth] || 0;
   const pct = meta > 0 ? Math.min(100, (totalBruto / meta) * 100) : 0;
@@ -288,7 +342,7 @@ export default function CadernoDeVendas() {
           totalBruto={totalBruto}
           comissao={comissao}
           totalGorjetas={totalGorjetas}
-          count={list.length}
+          count={doMes.length}
           meta={meta}
           pct={pct}
           hit={hit}
@@ -303,6 +357,15 @@ export default function CadernoDeVendas() {
             + Nova venda
           </button>
         </div>
+        <Filtros
+          filtros={filtros}
+          setFiltros={setFiltros}
+          ativo={filtroAtivo}
+          onLimpar={() => setFiltros(FILTROS_VAZIOS)}
+          resultados={list.length}
+          totalDoMes={doMes.length}
+          subtotal={subtotal}
+        />
         <Ledger
           list={list}
           sortAsc={sortAsc}
@@ -311,6 +374,8 @@ export default function CadernoDeVendas() {
           onDelete={deleteVenda}
           onAddEmpty={() => setModal({ mode: "add" })}
           monthLabel={monthLabel(currentMonth)}
+          filtroAtivo={filtroAtivo}
+          onLimparFiltros={() => setFiltros(FILTROS_VAZIOS)}
         />
       </div>
       {modal && (
@@ -511,19 +576,149 @@ function Stats({ totalBruto, comissao, totalGorjetas, count, meta, pct, hit, onM
   );
 }
 
-function Ledger({ list, sortAsc, onToggleSort, onEdit, onDelete, onAddEmpty, monthLabel }) {
+function Filtros({ filtros, setFiltros, ativo, onLimpar, resultados, totalDoMes, subtotal }) {
+  // Os campos de valor ficam escondidos até pedir — a busca por texto resolve a maioria dos casos.
+  const [aberto, setAberto] = useState(false);
+  const set = (campo) => (valor) => setFiltros((f) => ({ ...f, [campo]: valor }));
+
+  const avancadosAtivos =
+    filtros.valorMin.trim() !== "" || filtros.valorMax.trim() !== "" || filtros.soGorjeta;
+
+  return (
+    <div className="mb-2.5">
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-inkFaint text-sm pointer-events-none">
+            ⌕
+          </span>
+          <input
+            type="search"
+            value={filtros.busca}
+            onChange={(e) => set("busca")(e.target.value)}
+            placeholder="Buscar na descrição…"
+            aria-label="Buscar na descrição"
+            className="w-full text-base sm:text-sm pl-8 pr-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={() => setAberto((a) => !a)}
+          aria-expanded={aberto}
+          className={`text-xs font-semibold px-3 py-2 rounded-lg border whitespace-nowrap ${
+            avancadosAtivos
+              ? "border-gold text-goldDeep bg-[#FDF6E3]"
+              : "border-cardBorder text-inkSoft hover:bg-paperStripe hover:text-ink"
+          }`}
+        >
+          Valor {aberto ? "▲" : "▼"}
+        </button>
+      </div>
+
+      {aberto && (
+        <div className="mt-2 rounded-lg border border-cardBorder bg-white p-3 flex flex-col sm:flex-row sm:items-end gap-3">
+          <label className="flex-1">
+            <span className="block text-[11px] uppercase tracking-wide text-inkSoft mb-1">
+              Valor mínimo
+            </span>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={filtros.valorMin}
+              onChange={(e) => set("valorMin")(e.target.value)}
+              placeholder="0,00"
+              className="w-full font-mono text-base sm:text-sm px-2.5 py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
+            />
+          </label>
+          <label className="flex-1">
+            <span className="block text-[11px] uppercase tracking-wide text-inkSoft mb-1">
+              Valor máximo
+            </span>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={filtros.valorMax}
+              onChange={(e) => set("valorMax")(e.target.value)}
+              placeholder="sem limite"
+              className="w-full font-mono text-base sm:text-sm px-2.5 py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
+            />
+          </label>
+          <label className="flex items-center gap-2 sm:pb-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={filtros.soGorjeta}
+              onChange={(e) => set("soGorjeta")(e.target.checked)}
+              className="w-4 h-4 accent-[#7C5626]"
+            />
+            <span className="text-sm whitespace-nowrap">Só com gorjeta</span>
+          </label>
+        </div>
+      )}
+
+      {ativo && (
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-xs text-inkSoft">
+          <span>
+            {resultados} de {totalDoMes} venda{totalDoMes === 1 ? "" : "s"} do mês
+            {resultados > 0 && (
+              <>
+                {" · "}
+                <span className="font-mono">{fmtMoney(subtotal.bruto)}</span>
+                {" · comissão "}
+                <span className="font-mono text-goldDeep">{fmtMoney(subtotal.comissao)}</span>
+              </>
+            )}
+          </span>
+          <button
+            onClick={onLimpar}
+            className="font-semibold underline hover:text-ink whitespace-nowrap"
+          >
+            Limpar filtros
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Ledger({
+  list,
+  sortAsc,
+  onToggleSort,
+  onEdit,
+  onDelete,
+  onAddEmpty,
+  monthLabel,
+  filtroAtivo,
+  onLimparFiltros,
+}) {
   return (
     <div className="bg-white border border-cardBorder rounded-[10px] shadow-sm overflow-hidden">
       {list.length === 0 ? (
         <div className="text-center py-11 px-5">
-          <p className="font-serif font-semibold text-base mb-1.5">Nenhuma venda registrada</p>
-          <p className="text-sm text-inkSoft mb-4">Adicione a primeira venda de {monthLabel}.</p>
-          <button
-            onClick={onAddEmpty}
-            className="bg-ink text-paper text-sm font-semibold rounded-lg px-4 py-2 hover:bg-[#142A20]"
-          >
-            + Nova venda
-          </button>
+          {filtroAtivo ? (
+            <>
+              <p className="font-serif font-semibold text-base mb-1.5">Nenhuma venda encontrada</p>
+              <p className="text-sm text-inkSoft mb-4">
+                Nenhuma venda de {monthLabel} bate com esses filtros.
+              </p>
+              <button
+                onClick={onLimparFiltros}
+                className="text-sm font-semibold rounded-lg px-4 py-2.5 border border-cardBorder hover:bg-paperStripe"
+              >
+                Limpar filtros
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="font-serif font-semibold text-base mb-1.5">Nenhuma venda registrada</p>
+              <p className="text-sm text-inkSoft mb-4">Adicione a primeira venda de {monthLabel}.</p>
+              <button
+                onClick={onAddEmpty}
+                className="bg-ink text-paper text-sm font-semibold rounded-lg px-4 py-2.5 hover:bg-[#142A20]"
+              >
+                + Nova venda
+              </button>
+            </>
+          )}
         </div>
       ) : (
         <table className="w-full border-collapse">
