@@ -233,7 +233,7 @@ export default function CadernoDeVendas() {
 
   return (
     <div className="min-h-screen bg-paper font-sans text-ink">
-      <div className="max-w-3xl mx-auto px-5 py-9 pb-20">
+      <div className="max-w-3xl mx-auto px-4 sm:px-5 py-6 sm:py-9 pb-20">
         <Masthead
           currentMonth={currentMonth}
           onPrev={() => setCurrentMonth(shiftMonth(currentMonth, -1))}
@@ -251,9 +251,12 @@ export default function CadernoDeVendas() {
           className="hidden"
         />
         {erro && (
-          <div className="mb-4 rounded-lg border border-redStamp/40 bg-[#FBEAE7] px-4 py-2.5 text-sm text-redStamp flex items-center justify-between gap-3">
-            <span>Não foi possível salvar: {erro}</span>
-            <button onClick={() => carregar()} className="font-semibold underline whitespace-nowrap">
+          <div className="mb-4 rounded-lg border border-redStamp/40 bg-[#FBEAE7] px-4 py-2.5 text-sm text-redStamp flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1 sm:gap-3">
+            <span className="break-words">Não foi possível salvar: {erro}</span>
+            <button
+              onClick={() => carregar()}
+              className="font-semibold underline whitespace-nowrap self-start sm:self-auto"
+            >
               Recarregar
             </button>
           </div>
@@ -264,17 +267,17 @@ export default function CadernoDeVendas() {
               Encontramos {dadosLocais.vendas.length} venda(s) salvas neste navegador na versão
               antiga. Quer enviá-las para o banco de dados?
             </p>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <button
                 onClick={migrarDadosLocais}
                 disabled={ocupado}
-                className="bg-ink text-paper text-xs font-semibold rounded-lg px-3 py-1.5 hover:bg-[#142A20] disabled:opacity-50"
+                className="bg-ink text-paper text-xs font-semibold rounded-lg px-3 py-2 sm:py-1.5 hover:bg-[#142A20] disabled:opacity-50"
               >
                 Enviar para o banco
               </button>
               <button
                 onClick={descartarDadosLocais}
-                className="text-xs font-semibold rounded-lg px-3 py-1.5 border border-cardBorder hover:bg-paperStripe"
+                className="text-xs font-semibold rounded-lg px-3 py-2 sm:py-1.5 border border-cardBorder hover:bg-paperStripe"
               >
                 Descartar
               </button>
@@ -291,11 +294,11 @@ export default function CadernoDeVendas() {
           hit={hit}
           onMetaChange={updateMeta}
         />
-        <div className="flex items-center justify-between mb-2.5">
+        <div className="flex items-center justify-between gap-3 mb-2.5">
           <h2 className="font-serif font-semibold text-base m-0">Vendas do mês</h2>
           <button
             onClick={() => setModal({ mode: "add" })}
-            className="bg-ink text-paper text-sm font-semibold rounded-lg px-4 py-2 hover:bg-[#142A20] transition-colors"
+            className="bg-ink text-paper text-sm font-semibold rounded-lg px-4 py-2.5 min-h-[44px] whitespace-nowrap hover:bg-[#142A20] transition-colors"
           >
             + Nova venda
           </button>
@@ -362,13 +365,13 @@ function TelaLogin({ onEntrar }) {
           onChange={(e) => setSenha(e.target.value)}
           autoFocus
           required
-          className="w-full font-mono text-sm px-2.5 py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
+          className="w-full font-mono text-base sm:text-sm px-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
         />
         {erro && <p className="text-xs text-redStamp mt-2">{erro}</p>}
         <button
           type="submit"
           disabled={enviando}
-          className="w-full mt-4 text-sm font-semibold px-4 py-2 rounded-lg bg-ink text-paper border border-ink hover:bg-[#142A20] disabled:opacity-50"
+          className="w-full mt-4 text-sm font-semibold px-4 py-2.5 min-h-[44px] rounded-lg bg-ink text-paper border border-ink hover:bg-[#142A20] disabled:opacity-50"
         >
           {enviando ? "Entrando…" : "Entrar"}
         </button>
@@ -379,30 +382,33 @@ function TelaLogin({ onEntrar }) {
 
 function Masthead({ currentMonth, onPrev, onNext, onExport, onImportClick, onSair, ocupado }) {
   return (
-    <div className="flex items-end justify-between gap-4 border-b-2 border-ink pb-3.5 mb-5 flex-wrap">
+    <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 sm:gap-4 border-b-2 border-ink pb-3.5 mb-5">
       <div>
-        <h1 className="font-serif font-semibold text-3xl tracking-tight m-0">Caderno de vendas</h1>
+        <h1 className="font-serif font-semibold text-2xl sm:text-3xl tracking-tight m-0">
+          Caderno de vendas
+        </h1>
         <p className="text-xs text-inkSoft uppercase tracking-wide mt-1">
           Registro mensal &middot; comissão de {(COMISSAO_TAXA * 100).toFixed(0)}%
           {ocupado && <span className="ml-2 normal-case tracking-normal">salvando…</span>}
         </p>
       </div>
-      <div className="flex flex-col items-end gap-1.5">
-        <div className="flex items-center gap-2.5 font-mono">
+      <div className="flex flex-col items-stretch sm:items-end gap-2 sm:gap-1.5">
+        {/* No celular a navegação ocupa a linha toda: as setas ficam nas bordas, no alcance do polegar. */}
+        <div className="flex items-center justify-between sm:justify-end gap-2.5 font-mono">
           <button
             onClick={onPrev}
             aria-label="Mês anterior"
-            className="w-8 h-8 rounded-md border border-cardBorder hover:bg-paperStripe hover:border-inkFaint flex items-center justify-center text-ink"
+            className="w-11 h-11 sm:w-8 sm:h-8 shrink-0 rounded-md border border-cardBorder hover:bg-paperStripe hover:border-inkFaint flex items-center justify-center text-ink text-lg sm:text-base"
           >
             ‹
           </button>
-          <span className="text-sm font-semibold min-w-[128px] text-center capitalize">
+          <span className="text-sm font-semibold sm:min-w-[128px] text-center capitalize">
             {monthLabel(currentMonth)}
           </span>
           <button
             onClick={onNext}
             aria-label="Próximo mês"
-            className="w-8 h-8 rounded-md border border-cardBorder hover:bg-paperStripe hover:border-inkFaint flex items-center justify-center text-ink"
+            className="w-11 h-11 sm:w-8 sm:h-8 shrink-0 rounded-md border border-cardBorder hover:bg-paperStripe hover:border-inkFaint flex items-center justify-center text-ink text-lg sm:text-base"
           >
             ›
           </button>
@@ -411,21 +417,21 @@ function Masthead({ currentMonth, onPrev, onNext, onExport, onImportClick, onSai
           <button
             onClick={onExport}
             title="Baixar um arquivo .json com todas as vendas e metas"
-            className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-cardBorder text-ink hover:bg-paperStripe hover:border-inkFaint"
+            className="flex-1 sm:flex-none text-xs font-semibold px-3 py-2 sm:py-1.5 rounded-lg border border-cardBorder text-ink hover:bg-paperStripe hover:border-inkFaint whitespace-nowrap"
           >
-            ↓ Exportar JSON
+            ↓ Exportar<span className="hidden sm:inline"> JSON</span>
           </button>
           <button
             onClick={onImportClick}
             title="Carregar um arquivo .json exportado anteriormente"
-            className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-cardBorder text-inkSoft hover:bg-paperStripe hover:border-inkFaint hover:text-ink"
+            className="flex-1 sm:flex-none text-xs font-semibold px-3 py-2 sm:py-1.5 rounded-lg border border-cardBorder text-inkSoft hover:bg-paperStripe hover:border-inkFaint hover:text-ink whitespace-nowrap"
           >
-            ↑ Importar JSON
+            ↑ Importar<span className="hidden sm:inline"> JSON</span>
           </button>
           <button
             onClick={onSair}
             title="Sair"
-            className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-cardBorder text-inkSoft hover:bg-paperStripe hover:border-inkFaint hover:text-ink"
+            className="text-xs font-semibold px-3 py-2 sm:py-1.5 rounded-lg border border-cardBorder text-inkSoft hover:bg-paperStripe hover:border-inkFaint hover:text-ink"
           >
             Sair
           </button>
@@ -447,21 +453,24 @@ function Stats({ totalBruto, comissao, totalGorjetas, count, meta, pct, hit, onM
     onMetaChange(isNaN(val) || val < 0 ? 0 : val);
   }
 
+  // No celular: bruto e comissão lado a lado, meta ocupando a linha inteira.
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
-      <div className="bg-white border border-cardBorder rounded-[10px] p-4 shadow-sm">
+    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-3 mb-5">
+      <div className="bg-white border border-cardBorder rounded-[10px] p-3 sm:p-4 shadow-sm">
         <p className="text-[11px] uppercase tracking-wide text-inkSoft mb-1.5">Total bruto</p>
-        <p className="font-mono text-xl font-semibold">{fmtMoney(totalBruto)}</p>
+        <p className="font-mono text-lg sm:text-xl font-semibold break-all">{fmtMoney(totalBruto)}</p>
         <p className="text-[11px] text-inkFaint mt-1">
           {count} venda{count === 1 ? "" : "s"} no mês
         </p>
       </div>
 
-      <div className="bg-white border border-cardBorder rounded-[10px] p-4 shadow-sm">
+      <div className="bg-white border border-cardBorder rounded-[10px] p-3 sm:p-4 shadow-sm">
         <p className="text-[11px] uppercase tracking-wide text-inkSoft mb-1.5">
           Comissão ({(COMISSAO_TAXA * 100).toFixed(0)}%)
         </p>
-        <p className="font-mono text-xl font-semibold text-goldDeep">{fmtMoney(comissao)}</p>
+        <p className="font-mono text-lg sm:text-xl font-semibold text-goldDeep break-all">
+          {fmtMoney(comissao)}
+        </p>
         <p className="text-[11px] text-inkFaint mt-1">
           {totalGorjetas > 0
             ? `${fmtMoney(totalBruto * COMISSAO_TAXA)} do bruto + ${fmtMoney(totalGorjetas)} em gorjetas`
@@ -469,7 +478,7 @@ function Stats({ totalBruto, comissao, totalGorjetas, count, meta, pct, hit, onM
         </p>
       </div>
 
-      <div className="relative bg-white border border-cardBorder rounded-[10px] p-4 shadow-sm overflow-hidden">
+      <div className="col-span-2 sm:col-span-1 relative bg-white border border-cardBorder rounded-[10px] p-3 sm:p-4 shadow-sm overflow-hidden">
         {hit && (
           <span className="absolute top-2.5 -right-6 rotate-[10deg] border-2 border-greenStamp text-greenStamp font-mono text-[10px] font-semibold uppercase tracking-wide px-6 py-0.5 rounded">
             Meta batida
@@ -485,7 +494,7 @@ function Stats({ totalBruto, comissao, totalGorjetas, count, meta, pct, hit, onM
           value={metaDraft}
           onChange={(e) => setMetaDraft(e.target.value)}
           onBlur={commit}
-          className="font-mono text-xl font-semibold bg-transparent border-b border-dashed border-inkFaint focus:border-gold outline-none w-full pb-0.5"
+          className="font-mono text-lg sm:text-xl font-semibold bg-transparent border-b border-dashed border-inkFaint focus:border-gold outline-none w-full pb-0.5"
         />
         <p className="text-[10.5px] text-inkFaint mt-1">Toque para definir a meta em R$</p>
         <div className="mt-2.5 h-1.5 bg-paperStripe rounded-full overflow-hidden">
@@ -522,17 +531,17 @@ function Ledger({ list, sortAsc, onToggleSort, onEdit, onDelete, onAddEmpty, mon
             <tr>
               <th
                 onClick={onToggleSort}
-                className="cursor-pointer select-none text-left text-[11px] uppercase tracking-wide text-inkSoft px-3.5 py-2.5 border-b border-cardBorder bg-paperStripe font-mono hover:text-ink"
+                className="cursor-pointer select-none text-left text-[11px] uppercase tracking-wide text-inkSoft px-2.5 sm:px-3.5 py-2.5 border-b border-cardBorder bg-paperStripe font-mono hover:text-ink"
               >
                 Data {sortAsc ? "↑" : "↓"}
               </th>
               <th className="hidden sm:table-cell text-left text-[11px] uppercase tracking-wide text-inkSoft px-3.5 py-2.5 border-b border-cardBorder bg-paperStripe">
                 Descrição
               </th>
-              <th className="text-right text-[11px] uppercase tracking-wide text-inkSoft px-3.5 py-2.5 border-b border-cardBorder bg-paperStripe">
-                Valor
+              <th className="text-right text-[11px] uppercase tracking-wide text-inkSoft px-2.5 sm:px-3.5 py-2.5 border-b border-cardBorder bg-paperStripe">
+                Valor<span className="sm:hidden"> / com.</span>
               </th>
-              <th className="text-right text-[11px] uppercase tracking-wide text-inkSoft px-3.5 py-2.5 border-b border-cardBorder bg-paperStripe">
+              <th className="hidden sm:table-cell text-right text-[11px] uppercase tracking-wide text-inkSoft px-3.5 py-2.5 border-b border-cardBorder bg-paperStripe">
                 Comissão
               </th>
               <th className="border-b border-cardBorder bg-paperStripe"></th>
@@ -541,10 +550,21 @@ function Ledger({ list, sortAsc, onToggleSort, onEdit, onDelete, onAddEmpty, mon
           <tbody>
             {list.map((v, i) => (
               <tr key={v.id} className={i % 2 === 1 ? "bg-paperStripe" : ""}>
-                <td className="font-mono whitespace-nowrap text-sm px-3.5 py-2.5 border-b border-paperLine">
-                  {fmtDate(v.date)}
+                <td className="align-top text-sm px-2.5 sm:px-3.5 py-2.5 border-b border-paperLine">
+                  <span className="font-mono whitespace-nowrap">{fmtDate(v.date)}</span>
+                  {/* A coluna Descrição some no celular, então ela reaparece aqui embaixo da data. */}
+                  {(v.description || v.bonus > 0) && (
+                    <span className="block sm:hidden text-xs text-inkSoft mt-0.5 break-words">
+                      {v.description}
+                      {v.bonus > 0 && (
+                        <span className="block text-goldDeep font-mono text-[10px] uppercase tracking-wide mt-0.5 whitespace-nowrap">
+                          + gorjeta {fmtMoney(v.bonus)}
+                        </span>
+                      )}
+                    </span>
+                  )}
                 </td>
-                <td className="hidden sm:table-cell text-sm text-inkSoft px-3.5 py-2.5 border-b border-paperLine">
+                <td className="hidden sm:table-cell align-top text-sm text-inkSoft px-3.5 py-2.5 border-b border-paperLine">
                   {v.description || "—"}
                   {v.bonus > 0 && (
                     <span className="ml-1.5 font-mono text-[10px] uppercase tracking-wide text-goldDeep border border-gold rounded px-1 py-0.5 whitespace-nowrap">
@@ -552,34 +572,35 @@ function Ledger({ list, sortAsc, onToggleSort, onEdit, onDelete, onAddEmpty, mon
                     </span>
                   )}
                 </td>
-                <td className="font-mono text-right text-sm px-3.5 py-2.5 border-b border-paperLine">
+                <td className="font-mono align-top text-right text-sm whitespace-nowrap px-2.5 sm:px-3.5 py-2.5 border-b border-paperLine">
                   {fmtMoney(v.value)}
+                  {/* No celular a coluna Comissão some, então ela vem logo abaixo do valor. */}
+                  <span className="block sm:hidden text-xs text-goldDeep mt-0.5">
+                    {fmtMoney(comissaoDe(v))}
+                  </span>
                 </td>
-                <td className="font-mono text-right text-sm text-goldDeep px-3.5 py-2.5 border-b border-paperLine">
+                <td className="hidden sm:table-cell font-mono align-top text-right text-sm text-goldDeep whitespace-nowrap px-3.5 py-2.5 border-b border-paperLine">
                   {fmtMoney(comissaoDe(v))}
-                  {v.bonus > 0 && (
-                    <span className="block text-[10px] text-inkFaint sm:hidden">
-                      inclui {fmtMoney(v.bonus)} de gorjeta
-                    </span>
-                  )}
                 </td>
-                <td className="text-right whitespace-nowrap px-3.5 py-2.5 border-b border-paperLine">
-                  <button
-                    onClick={() => onEdit(v)}
-                    aria-label="Editar venda"
-                    title="Editar venda"
-                    className="text-inkFaint hover:text-ink hover:bg-paperStripe rounded px-1.5 text-sm"
-                  >
-                    ✎
-                  </button>
-                  <button
-                    onClick={() => onDelete(v.id)}
-                    aria-label="Excluir venda"
-                    title="Excluir venda"
-                    className="text-inkFaint hover:text-redStamp hover:bg-[#FBEAE7] rounded px-1.5 text-base"
-                  >
-                    ×
-                  </button>
+                <td className="align-top whitespace-nowrap px-1 sm:px-2 py-1.5 sm:py-2.5 border-b border-paperLine">
+                  <div className="flex items-center justify-end">
+                    <button
+                      onClick={() => onEdit(v)}
+                      aria-label="Editar venda"
+                      title="Editar venda"
+                      className="w-9 h-9 sm:w-7 sm:h-7 flex items-center justify-center text-inkFaint hover:text-ink hover:bg-paperStripe rounded text-sm"
+                    >
+                      ✎
+                    </button>
+                    <button
+                      onClick={() => onDelete(v.id)}
+                      aria-label="Excluir venda"
+                      title="Excluir venda"
+                      className="w-9 h-9 sm:w-7 sm:h-7 flex items-center justify-center text-inkFaint hover:text-redStamp hover:bg-[#FBEAE7] rounded text-base"
+                    >
+                      ×
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
@@ -617,10 +638,11 @@ function VendaModal({ venda, currentMonth, onCancel, onSave }) {
 
   return (
     <div
-      className="fixed inset-0 bg-black/35 flex items-center justify-center p-5 z-50"
+      className="fixed inset-0 bg-black/35 flex items-end sm:items-center justify-center p-0 sm:p-5 z-50"
       onClick={(e) => e.target === e.currentTarget && onCancel()}
     >
-      <div className="bg-paper border border-cardBorder rounded-xl w-full max-w-sm p-6 shadow-xl">
+      {/* No celular vira uma folha colada embaixo, perto do teclado; no desktop, caixa centralizada. */}
+      <div className="bg-paper border border-cardBorder rounded-t-2xl sm:rounded-xl w-full max-w-sm p-5 sm:p-6 shadow-xl max-h-[92vh] sm:max-h-[85vh] overflow-y-auto">
         <h3 className="font-serif font-semibold text-lg mb-4">
           {editando ? "Editar venda" : "Nova venda"}
         </h3>
@@ -632,7 +654,7 @@ function VendaModal({ venda, currentMonth, onCancel, onSave }) {
               value={date}
               onChange={(e) => setDate(e.target.value)}
               required
-              className="w-full font-mono text-sm px-2.5 py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
+              className="w-full font-mono text-base sm:text-sm px-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
             />
           </div>
           <div className="mb-3.5">
@@ -642,27 +664,32 @@ function VendaModal({ venda, currentMonth, onCancel, onSave }) {
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Cliente ou produto"
-              className="w-full font-mono text-sm px-2.5 py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
+              className="w-full font-mono text-base sm:text-sm px-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
             />
           </div>
-          <div className="mb-3.5 relative">
+          <div className="mb-3.5">
             <label className="block text-xs uppercase tracking-wide text-inkSoft mb-1.5">Valor da venda</label>
-            <span className="absolute left-2.5 top-[34px] font-mono text-sm text-inkSoft">R$</span>
-            <input
-              type="number"
-              min="0.01"
-              step="0.01"
-              value={valor}
-              onChange={(e) => setValor(e.target.value)}
-              placeholder="0,00"
-              required
-              className="w-full font-mono text-sm pl-9 pr-2.5 py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
-            />
+            <div className="relative">
+              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 font-mono text-sm text-inkSoft pointer-events-none">
+                R$
+              </span>
+              <input
+                type="number"
+                min="0.01"
+                step="0.01"
+                inputMode="decimal"
+                value={valor}
+                onChange={(e) => setValor(e.target.value)}
+                placeholder="0,00"
+                required
+                className="w-full font-mono text-base sm:text-sm pl-9 pr-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
+              />
+            </div>
           </div>
 
           {mostraGorjeta ? (
-            <div className="mb-3.5 relative">
-              <div className="flex items-baseline justify-between mb-1.5">
+            <div className="mb-3.5">
+              <div className="flex items-baseline justify-between gap-2 mb-1.5">
                 <label className="block text-xs uppercase tracking-wide text-inkSoft">
                   Gorjeta / comissão extra
                 </label>
@@ -672,23 +699,27 @@ function VendaModal({ venda, currentMonth, onCancel, onSave }) {
                     setMostraGorjeta(false);
                     setGorjeta("");
                   }}
-                  className="text-[11px] font-semibold text-inkFaint hover:text-redStamp"
+                  className="text-[11px] font-semibold text-inkFaint hover:text-redStamp py-1 px-1 -mr-1"
                 >
                   remover
                 </button>
               </div>
-              <span className="absolute left-2.5 top-[34px] font-mono text-sm text-inkSoft">R$</span>
-              <input
-                type="number"
-                min="0"
-                step="0.01"
-                inputMode="decimal"
-                value={gorjeta}
-                onChange={(e) => setGorjeta(e.target.value)}
-                placeholder="0,00"
-                autoFocus
-                className="w-full font-mono text-sm pl-9 pr-2.5 py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
-              />
+              <div className="relative">
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 font-mono text-sm text-inkSoft pointer-events-none">
+                  R$
+                </span>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  value={gorjeta}
+                  onChange={(e) => setGorjeta(e.target.value)}
+                  placeholder="0,00"
+                  autoFocus
+                  className="w-full font-mono text-base sm:text-sm pl-9 pr-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
+                />
+              </div>
               <p className="text-[11px] text-inkFaint mt-1">
                 Entra 100% na comissão, sem contar no total bruto nem na meta.
               </p>
@@ -697,7 +728,7 @@ function VendaModal({ venda, currentMonth, onCancel, onSave }) {
             <button
               type="button"
               onClick={() => setMostraGorjeta(true)}
-              className="w-full mb-3.5 text-xs font-semibold px-3 py-2 rounded-lg border border-dashed border-gold text-goldDeep hover:bg-[#FDF6E3]"
+              className="w-full mb-3.5 text-xs font-semibold px-3 py-2.5 min-h-[44px] rounded-lg border border-dashed border-gold text-goldDeep hover:bg-[#FDF6E3]"
             >
               + Adicionar gorjeta / comissão extra
             </button>
@@ -712,18 +743,18 @@ function VendaModal({ venda, currentMonth, onCancel, onSave }) {
             </span>
           </div>
 
-          <div className="flex justify-end gap-2 mt-4">
+          <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 mt-4">
             <button
               type="button"
               onClick={onCancel}
-              className="text-sm font-semibold px-4 py-2 rounded-lg border border-cardBorder hover:bg-paperStripe"
+              className="text-sm font-semibold px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-lg border border-cardBorder hover:bg-paperStripe"
             >
               Cancelar
             </button>
             <button
               type="submit"
               disabled={enviando}
-              className="text-sm font-semibold px-4 py-2 rounded-lg bg-ink text-paper border border-ink hover:bg-[#142A20] disabled:opacity-50"
+              className="text-sm font-semibold px-4 py-2.5 sm:py-2 min-h-[44px] sm:min-h-0 rounded-lg bg-ink text-paper border border-ink hover:bg-[#142A20] disabled:opacity-50"
             >
               {enviando ? "Salvando…" : editando ? "Salvar alterações" : "Salvar venda"}
             </button>
