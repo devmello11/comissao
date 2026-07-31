@@ -6,7 +6,25 @@ entrar com a senha.
 
 ## Funcionalidades
 
-- Botão **+ Nova venda** para registrar data, descrição (opcional) e valor.
+- Botão **+ Nova venda** para registrar data, categoria (opcional), descrição (opcional) e valor.
+- **Categorias** guardadas no banco (tabela `categorias`), semeada no primeiro acesso com
+  Kimonos novos/usados/importados/Gracie Barra, No-GI e Protetores bucais.
+  Botão **+ Nova categoria** no formulário da venda cria e já seleciona a categoria — ela
+  aparece em qualquer aparelho e sobrevive mesmo sem nenhuma venda usando ela. O campo também
+  aceita texto livre. Grafias equivalentes ("no-gi" e "No-GI") são tratadas como a mesma.
+- Botão **Categorias** no cabeçalho abre o gerenciamento: criar, **renomear** e excluir.
+  Renomear roda em transação e atualiza junto todas as vendas que usavam o nome antigo.
+  Excluir só é permitido para categoria sem nenhuma venda — em uso, o app avisa quantas
+  vendas dependem dela e sugere renomear.
+- **Resumo por categoria** do mês em gráfico de rosca, com o total no miolo e legenda com
+  percentual e valor. Passar o mouse troca o número do miolo pela fatia; clicar filtra a lista.
+  Acima de 6 categorias, as menores somam em "Outras" — o detalhamento completo sai em
+  "Ver as N categorias".
+- **Setas de minimizar** no resumo por categoria e em "Vendas do mês"; fechados, mostram
+  um resumo de uma linha.
+- **Filtros** por dia, texto (descrição ou categoria, ignorando acento e maiúscula), categoria,
+  faixa de valor e "só com gorjeta", com subtotal do recorte filtrado. O seletor de dia tem atalho
+  **Hoje**; escolher um dia de outro mês leva a navegação junto, e trocar de mês limpa o dia.
 - Botão **+ Adicionar gorjeta / comissão extra** dentro da venda: o valor informado entra
   **integral na comissão**, sem contar no total bruto nem na meta.
 - Botão **✎ Editar** em cada linha para corrigir data, descrição, valor ou gorjeta de uma venda já lançada.
@@ -24,7 +42,7 @@ entrar com a senha.
 
 No painel da Vercel, dentro do projeto: **Storage → Create Database → Neon (Postgres)**.
 Ao conectar o banco ao projeto, a Vercel cria sozinha a variável `DATABASE_URL`.
-As tabelas (`vendas` e `metas`) são criadas automaticamente no primeiro acesso — não precisa
+As tabelas (`vendas`, `metas` e `categorias`) são criadas automaticamente no primeiro acesso — não precisa
 rodar nenhum SQL à mão.
 
 ### 2. Definir a senha

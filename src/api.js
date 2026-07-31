@@ -41,4 +41,9 @@ export const api = {
     req(`/api/vendas/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
   salvarMeta: (mes, valor) => req("/api/metas", { method: "PUT", body: { mes, valor } }),
+
+  criarCategoria: (nome) => req("/api/categorias", { method: "POST", body: { nome } }),
+  renomearCategoria: (de, para) => req("/api/categorias", { method: "PUT", body: { de, para } }),
+  excluirCategoria: (nome) =>
+    req(`/api/categorias?nome=${encodeURIComponent(nome)}`, { method: "DELETE" }),
 };

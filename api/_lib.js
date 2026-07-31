@@ -3,6 +3,31 @@ import { createHash, timingSafeEqual } from "node:crypto";
 
 const COOKIE = "caderno_auth";
 
+/** Sugestões que existem no primeiro acesso. Depois disso a lista é sua. */
+export const CATEGORIAS_INICIAIS = [
+  "Kimonos novos",
+  "Kimonos usados",
+  "Kimonos importados",
+  "Kimonos Gracie Barra",
+  "No-GI",
+  "Protetores bucais",
+];
+
+/** Nome normalizado (sem acento, sem caixa, sem espaço sobrando) usado como chave. */
+export function chaveCategoria(nome) {
+  return String(nome || "")
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+/** Limpa o nome que vai ser exibido. Devolve "" se não sobrar nada. */
+export function limpaNomeCategoria(nome) {
+  return String(nome || "").trim().replace(/\s+/g, " ").slice(0, 60);
+}
+
 let _sql = null;
 let _schemaPronto = null;
 
@@ -42,12 +67,38 @@ export function garantirSchema() {
       ALTER TABLE vendas
       ADD COLUMN IF NOT EXISTS bonus NUMERIC(12, 2) NOT NULL DEFAULT 0
     `;
+    // Categoria do item vendido. Texto livre: a lista de sugestões vive no front,
+    // então criar categoria nova não exige deploy nem migração.
+    await sql`
+      ALTER TABLE vendas
+      ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT ''
+    `;
     await sql`
       CREATE TABLE IF NOT EXISTS metas (
         mes   TEXT PRIMARY KEY,
         valor NUMERIC(12, 2) NOT NULL
       )
     `;
+    // Lista de categorias disponíveis. Existe separada das vendas para que uma
+    // categoria criada pelo botão sobreviva mesmo sem nenhuma venda usando ela.
+    // "chave" é o nome normalizado (sem acento/caixa) e evita duplicata tipo No-GI/no-gi.
+    await sql`
+      CREATE TABLE IF NOT EXISTS categorias (
+        chave TEXT PRIMARY KEY,
+        nome  TEXT NOT NULL
+      )
+    `;
+    // Semeia as sugestões iniciais só se a tabela estiver vazia — assim uma categoria
+    // que você apagar não volta sozinha no próximo deploy.
+    const [{ total }] = await sql`SELECT count(*)::int AS total FROM categorias`;
+    if (total === 0) {
+      for (const nome of CATEGORIAS_INICIAIS) {
+        await sql`
+          INSERT INTO categorias (chave, nome) VALUES (${chaveCategoria(nome)}, ${nome})
+          ON CONFLICT (chave) DO NOTHING
+        `;
+      }
+    }
   })().catch((err) => {
     _schemaPronto = null; // permite tentar de novo na próxima chamada
     throw err;
@@ -140,6 +191,7 @@ export function normalizaVenda(row) {
     description: row.description || "",
     value: Number(row.value),
     bonus: Number(row.bonus || 0),
+    category: row.category || "",
   };
 }
 
@@ -159,5 +211,7 @@ export function validaVenda(body) {
     return { ok: false, erro: "gorjeta_invalida" };
   }
   const description = String(body?.description || "").slice(0, 300);
-  return { ok: true, dados: { date, description, value, bonus } };
+  // Categoria é opcional — venda sem categoria fica como "" e aparece como "Sem categoria".
+  const category = String(body?.category || "").trim().replace(/\s+/g, " ").slice(0, 60);
+  return { ok: true, dados: { date, description, value, bonus, category } };
 }

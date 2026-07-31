@@ -23,9 +23,9 @@ export default handler(async (req, res) => {
     const [row] = await sql`
       UPDATE vendas
       SET date = ${dados.date}, description = ${dados.description},
-          value = ${dados.value}, bonus = ${dados.bonus}
+          value = ${dados.value}, bonus = ${dados.bonus}, category = ${dados.category}
       WHERE id = ${id}
-      RETURNING id, date, description, value, bonus
+      RETURNING id, date, description, value, bonus, category
     `;
     if (!row) {
       res.status(404).json({ erro: "venda_nao_encontrada" });
