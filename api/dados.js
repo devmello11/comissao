@@ -1,4 +1,5 @@
 import {
+  exigirAdmin,
   exigirLogin,
   garantirSchema,
   getSql,
@@ -30,6 +31,7 @@ export default handler(async (req, res) => {
 
   // PUT: substitui tudo (usado pelo "Importar JSON").
   if (req.method === "PUT") {
+    if (!exigirAdmin(req, res)) return;
     const vendasEntrada = Array.isArray(req.body?.vendas) ? req.body.vendas : null;
     const metasEntrada = req.body?.metas;
     if (!vendasEntrada || typeof metasEntrada !== "object" || metasEntrada === null) {

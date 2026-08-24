@@ -1,4 +1,5 @@
 import {
+  exigirAdmin,
   exigirLogin,
   garantirSchema,
   getSql,
@@ -15,6 +16,7 @@ export default handler(async (req, res) => {
   const id = String(req.query.id || "");
 
   if (req.method === "PUT") {
+    if (!exigirAdmin(req, res)) return;
     const { ok, dados, erro } = validaVenda(req.body);
     if (!ok) {
       res.status(400).json({ erro });
@@ -36,6 +38,7 @@ export default handler(async (req, res) => {
   }
 
   if (req.method === "DELETE") {
+    if (!exigirAdmin(req, res)) return;
     const rows = await sql`DELETE FROM vendas WHERE id = ${id} RETURNING id`;
     if (rows.length === 0) {
       res.status(404).json({ erro: "venda_nao_encontrada" });

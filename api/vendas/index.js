@@ -1,4 +1,5 @@
 import {
+  exigirAdmin,
   exigirLogin,
   garantirSchema,
   getSql,
@@ -20,6 +21,7 @@ export default handler(async (req, res) => {
   }
 
   if (req.method === "POST") {
+    if (!exigirAdmin(req, res)) return;
     const { ok, dados, erro } = validaVenda(req.body);
     if (!ok) {
       res.status(400).json({ erro });

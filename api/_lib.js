@@ -117,6 +117,43 @@ function tokenEsperado() {
   return createHash("sha256").update("caderno:" + senha).digest("hex");
 }
 
+export function parseUsuarios() {
+  const raw = (process.env.APP_USUARIOS || "").trim();
+  const usuarios = {};
+  if (!raw) return usuarios;
+
+  for (const parte of raw.split(",")) {
+    const item = parte.trim();
+    if (!item) continue;
+    const idx = item.indexOf("=");
+    if (idx <= 0) continue;
+    const usuario = item.slice(0, idx).trim();
+    const restante = item.slice(idx + 1).trim();
+    if (!usuario || !restante) continue;
+
+    let senha = restante;
+    let papel = "admin";
+
+    const separador = restante.includes("|") ? "|" : restante.includes(":") ? ":" : null;
+    if (separador) {
+      const pos = restante.lastIndexOf(separador);
+      const possivelPapel = restante.slice(pos + 1).trim().toLowerCase();
+      if (["admin", "viewer"].includes(possivelPapel)) {
+        senha = restante.slice(0, pos).trim();
+        papel = possivelPapel;
+      }
+    }
+
+    usuarios[usuario] = { senha, papel };
+  }
+
+  return usuarios;
+}
+
+function tokenUsuario(usuario, senha, papel = "admin") {
+  return createHash("sha256").update(`caderno:${String(usuario)}:${String(senha)}:${String(papel)}`).digest("hex");
+}
+
 function comparaSeguro(a, b) {
   const bufA = Buffer.from(String(a));
   const bufB = Buffer.from(String(b));
@@ -125,10 +162,45 @@ function comparaSeguro(a, b) {
 }
 
 export function senhaConfere(senha) {
+  const usuarios = parseUsuarios();
+  const chaves = Object.keys(usuarios);
+  if (chaves.length > 0) {
+    return chaves.some((usuario) => {
+      const config = usuarios[usuario];
+      return comparaSeguro(
+        createHash("sha256").update("caderno:" + String(senha)).digest("hex"),
+        createHash("sha256").update("caderno:" + String(config.senha)).digest("hex")
+      );
+    });
+  }
+
   return comparaSeguro(
     createHash("sha256").update("caderno:" + String(senha)).digest("hex"),
     tokenEsperado()
   );
+}
+
+export function credenciaisValidas(usuario, senha) {
+  const usuarioNormalizado = String(usuario || "").trim();
+  const usuarios = parseUsuarios();
+
+  if (usuarioNormalizado) {
+    const config = usuarios[usuarioNormalizado];
+    if (!config) return false;
+    return comparaSeguro(
+      createHash("sha256").update("caderno:" + String(senha)).digest("hex"),
+      createHash("sha256").update("caderno:" + String(config.senha)).digest("hex")
+    );
+  }
+
+  if (Object.keys(usuarios).length > 0) return false;
+  return senhaConfere(senha);
+}
+
+export function papelDoUsuario(usuario) {
+  const usuarios = parseUsuarios();
+  const config = usuarios[String(usuario || "").trim()];
+  return config?.papel || "admin";
 }
 
 function lerCookie(req, nome) {
@@ -140,11 +212,15 @@ function lerCookie(req, nome) {
   return null;
 }
 
-export function setCookieSessao(res) {
+export function setCookieSessao(res, usuario = null, senha = null) {
   const seguro = process.env.NODE_ENV === "production" ? " Secure;" : "";
+  const papel = usuario ? papelDoUsuario(usuario) : "admin";
+  const valor = usuario && senha
+    ? `${encodeURIComponent(usuario)}|${papel}|${tokenUsuario(usuario, senha, papel)}`
+    : tokenEsperado();
   res.setHeader(
     "Set-Cookie",
-    `${COOKIE}=${tokenEsperado()}; HttpOnly;${seguro} SameSite=Lax; Path=/; Max-Age=${60 * 60 * 24 * 90}`
+    `${COOKIE}=${valor}; HttpOnly;${seguro} SameSite=Lax; Path=/; Max-Age=${60 * 60 * 24 * 90}`
   );
 }
 
@@ -157,10 +233,44 @@ export function limparCookieSessao(res) {
 }
 
 /** Devolve true se a requisição está autenticada; senão já responde 401 e devolve false. */
-export function exigirLogin(req, res) {
+export function perfilAutenticado(req) {
   const cookie = lerCookie(req, COOKIE);
-  if (cookie && comparaSeguro(cookie, tokenEsperado())) return true;
+  if (!cookie) return null;
+
+  if (cookie.includes("|")) {
+    const partes = cookie.split("|");
+    const usuarioRaw = partes[0];
+    const papel = (partes[1] || "admin").toLowerCase();
+    const tokenRaw = partes[2] || "";
+    const usuario = decodeURIComponent(usuarioRaw || "");
+    const usuarios = parseUsuarios();
+    const config = usuarios[usuario];
+    if (usuario && config && tokenRaw) {
+      const hashEsperado = tokenUsuario(usuario, config.senha, config.papel || papel);
+      if (comparaSeguro(tokenRaw, hashEsperado)) {
+        return { usuario, papel: config.papel || papel };
+      }
+    }
+  }
+
+  if (process.env.APP_SENHA && cookie && comparaSeguro(cookie, tokenEsperado())) {
+    return { usuario: null, papel: "admin" };
+  }
+
+  return null;
+}
+
+export function exigirLogin(req, res) {
+  const perfil = perfilAutenticado(req);
+  if (perfil) return true;
   res.status(401).json({ erro: "nao_autenticado" });
+  return false;
+}
+
+export function exigirAdmin(req, res) {
+  const perfil = perfilAutenticado(req);
+  if (perfil?.papel === "admin") return true;
+  res.status(403).json({ erro: "acesso_negado" });
   return false;
 }
 

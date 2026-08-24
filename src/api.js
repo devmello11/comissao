@@ -27,8 +27,15 @@ async function req(url, options = {}) {
 }
 
 export const api = {
-  login: (senha) => req("/api/login", { method: "POST", body: { senha } }),
+  login: (usuarioOuSenha, senhaOpcional) => {
+    const payload =
+      typeof usuarioOuSenha === "object" && usuarioOuSenha !== null
+        ? usuarioOuSenha
+        : { usuario: typeof usuarioOuSenha === "string" && senhaOpcional ? usuarioOuSenha : "", senha: senhaOpcional ?? usuarioOuSenha };
+    return req("/api/login", { method: "POST", body: payload });
+  },
   logout: () => req("/api/logout", { method: "POST" }),
+  session: () => req("/api/session"),
 
   carregarTudo: () => req("/api/dados"),
   substituirTudo: (vendas, metas) =>

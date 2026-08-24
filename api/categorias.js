@@ -1,5 +1,6 @@
 import {
   chaveCategoria,
+  exigirAdmin,
   exigirLogin,
   garantirSchema,
   getSql,
@@ -20,6 +21,7 @@ export default handler(async (req, res) => {
   }
 
   if (req.method === "POST") {
+    if (!exigirAdmin(req, res)) return;
     const nome = limpaNomeCategoria(req.body?.nome);
     if (!nome) {
       res.status(400).json({ erro: "nome_vazio" });
@@ -42,6 +44,7 @@ export default handler(async (req, res) => {
   // PUT: renomeia. As vendas que usam a categoria antiga são atualizadas junto,
   // senão ficariam presas ao nome velho e a renomeação seria só cosmética.
   if (req.method === "PUT") {
+    if (!exigirAdmin(req, res)) return;
     const de = limpaNomeCategoria(req.body?.de);
     const para = limpaNomeCategoria(req.body?.para);
     if (!de || !para) {
@@ -78,6 +81,7 @@ export default handler(async (req, res) => {
   }
 
   if (req.method === "DELETE") {
+    if (!exigirAdmin(req, res)) return;
     const nome = limpaNomeCategoria(req.query?.nome);
     if (!nome) {
       res.status(400).json({ erro: "nome_vazio" });

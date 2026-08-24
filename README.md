@@ -45,16 +45,20 @@ Ao conectar o banco ao projeto, a Vercel cria sozinha a variável `DATABASE_URL`
 As tabelas (`vendas`, `metas` e `categorias`) são criadas automaticamente no primeiro acesso — não precisa
 rodar nenhum SQL à mão.
 
-### 2. Definir a senha
+### 2. Definir a senha ou usuários
 
-Em **Settings → Environment Variables**, adicione:
+Em **Settings → Environment Variables**, adicione uma destas opções:
 
-| Nome        | Valor              | Ambientes                        |
-| ----------- | ------------------ | -------------------------------- |
+| Nome | Valor | Ambientes |
+| ---- | ----- | --------- |
 | `APP_SENHA` | a senha que quiser | Production, Preview, Development |
+| `APP_USUARIOS` | `usuario1=suaSenha,usuario2=outraSenha` | Production, Preview, Development |
 
-Sem essa variável a API responde erro — é proposital, para o caderno nunca ficar aberto.
-Para trocar a senha depois, basta editar a variável e fazer um novo deploy (todo mundo que
+Para o uso com vários logins, preencha `APP_USUARIOS` e o login passa a pedir usuário + senha.
+O modo legado com `APP_SENHA` continua funcionando para manter compatibilidade.
+
+Sem pelo menos uma dessas variáveis a API responde erro — é proposital, para o caderno nunca ficar aberto.
+Para trocar a senha ou os usuários depois, basta editar a variável e fazer um novo deploy (todo mundo que
 estiver logado precisará entrar de novo).
 
 ### 3. Deploy
@@ -82,7 +86,7 @@ Todas as rotas exigem o cookie de sessão criado pelo `POST /api/login`.
 
 | Rota               | Métodos       | O que faz                                      |
 | ------------------ | ------------- | ---------------------------------------------- |
-| `/api/login`       | POST          | Recebe `{ senha }` e cria a sessão (90 dias)   |
+| `/api/login`       | POST          | Recebe `{ usuario?, senha }` e cria a sessão (90 dias) |
 | `/api/logout`      | POST          | Encerra a sessão                               |
 | `/api/dados`       | GET, PUT      | Lê tudo; PUT substitui tudo (usado no importar)|
 | `/api/vendas`      | GET, POST     | Lista e cria vendas                            |

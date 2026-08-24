@@ -90,6 +90,7 @@ function canonizaCategoria(texto, conhecidas) {
 export default function CadernoDeVendas() {
   const [vendas, setVendas] = useState([]);
   const [metas, setMetas] = useState({});
+  const [perfil, setPerfil] = useState({ usuario: null, papel: "admin" });
   const [currentMonth, setCurrentMonth] = useState(ymKey(new Date()));
   const [sortAsc, setSortAsc] = useState(true);
   const [modal, setModal] = useState(null); // null | { mode: "add" } | { mode: "edit", venda }
@@ -107,15 +108,20 @@ export default function CadernoDeVendas() {
 
   async function carregar() {
     try {
-      const dados = await api.carregarTudo();
+      const [dados, infoSessao] = await Promise.all([
+        api.carregarTudo(),
+        api.session().catch(() => ({ usuario: null, papel: "admin" })),
+      ]);
       setVendas(dados.vendas);
       setMetas(dados.metas);
       setCategorias(dados.categorias || []);
+      setPerfil({ usuario: infoSessao.usuario || null, papel: infoSessao.papel || "admin" });
       setSessao("pronto");
       setErro("");
       if (dados.vendas.length === 0) verificarDadosLocais();
     } catch (e) {
       if (e instanceof NaoAutenticado) {
+        setPerfil({ usuario: null, papel: "admin" });
         setSessao("login");
       } else {
         setSessao("pronto");
@@ -209,6 +215,7 @@ export default function CadernoDeVendas() {
     setVendas([]);
     setMetas({});
     setCategorias([]);
+    setPerfil({ usuario: null, papel: "admin" });
     setSessao("login");
   }
 
@@ -369,6 +376,7 @@ export default function CadernoDeVendas() {
   const meta = metas[currentMonth] || 0;
   const pct = meta > 0 ? Math.min(100, (totalBruto / meta) * 100) : 0;
   const hit = meta > 0 && totalBruto >= meta;
+  const ehAdmin = perfil.papel === "admin";
 
   async function addVenda(dados) {
     let criada = null;
@@ -493,6 +501,8 @@ export default function CadernoDeVendas() {
       <div className="max-w-3xl mx-auto px-4 sm:px-5 py-6 sm:py-9 pb-20">
         <Masthead
           currentMonth={currentMonth}
+          usuario={perfil.usuario}
+          papel={perfil.papel}
           onPrev={() => irParaMes(shiftMonth(currentMonth, -1))}
           onNext={() => irParaMes(shiftMonth(currentMonth, 1))}
           onExport={exportBackup}
@@ -500,6 +510,7 @@ export default function CadernoDeVendas() {
           onCategorias={() => setGerenciandoCat(true)}
           onSair={sair}
           ocupado={ocupado}
+          podeAlterar={ehAdmin}
         />
         <input
           type="file"
@@ -551,6 +562,7 @@ export default function CadernoDeVendas() {
           pct={pct}
           hit={hit}
           onMetaChange={updateMeta}
+          podeAlterar={ehAdmin}
         />
         <ResumoCategorias
           dados={porCategoria}
@@ -573,15 +585,17 @@ export default function CadernoDeVendas() {
                   {doMes.length} venda{doMes.length === 1 ? "" : "s"}
                 </span>
               )}
-              <button
-                onClick={() => {
-                  setVendasAberto(true);
-                  setModal({ mode: "add" });
-                }}
-                className="bg-ink text-paper text-sm font-semibold rounded-lg px-4 py-2.5 min-h-[44px] whitespace-nowrap hover:bg-[#142A20] transition-colors"
-              >
-                + Nova venda
-              </button>
+              {ehAdmin && (
+                <button
+                  onClick={() => {
+                    setVendasAberto(true);
+                    setModal({ mode: "add" });
+                  }}
+                  className="bg-ink text-paper text-sm font-semibold rounded-lg px-4 py-2.5 min-h-[44px] whitespace-nowrap hover:bg-[#142A20] transition-colors"
+                >
+                  + Nova venda
+                </button>
+              )}
             </div>
           </CabecalhoDobravel>
         </div>
@@ -608,10 +622,11 @@ export default function CadernoDeVendas() {
             monthLabel={monthLabel(currentMonth)}
             filtroAtivo={filtroAtivo}
             onLimparFiltros={() => setFiltros(FILTROS_VAZIOS)}
+            podeAlterar={ehAdmin}
           />
         </div>
       </div>
-      {gerenciandoCat && (
+      {ehAdmin && gerenciandoCat && (
         <GerenciarCategorias
           categorias={categorias}
           usos={usosPorCategoria}
@@ -622,7 +637,7 @@ export default function CadernoDeVendas() {
           onFechar={() => setGerenciandoCat(false)}
         />
       )}
-      {modal && (
+      {ehAdmin && modal && (
         <VendaModal
           key={modal.mode === "edit" ? modal.venda.id : "add"}
           venda={modal.mode === "edit" ? modal.venda : null}
@@ -640,6 +655,7 @@ export default function CadernoDeVendas() {
 }
 
 function TelaLogin({ onEntrar }) {
+  const [usuario, setUsuario] = useState("");
   const [senha, setSenha] = useState("");
   const [erro, setErro] = useState("");
   const [enviando, setEnviando] = useState(false);
@@ -649,12 +665,12 @@ function TelaLogin({ onEntrar }) {
     setEnviando(true);
     setErro("");
     try {
-      await api.login(senha);
+      await api.login({ usuario: usuario.trim(), senha });
       await onEntrar();
     } catch (err) {
       setErro(
         err.message === "senha_incorreta"
-          ? "Senha incorreta."
+          ? "Usuário ou senha incorretos."
           : "Não foi possível entrar: " + err.message
       );
       setEnviando(false);
@@ -669,6 +685,15 @@ function TelaLogin({ onEntrar }) {
       >
         <h1 className="font-serif font-semibold text-2xl tracking-tight m-0">Caderno de vendas</h1>
         <p className="text-xs text-inkSoft uppercase tracking-wide mt-1 mb-5">Acesso restrito</p>
+        <label className="block text-xs uppercase tracking-wide text-inkSoft mb-1.5">Usuário</label>
+        <input
+          type="text"
+          value={usuario}
+          onChange={(e) => setUsuario(e.target.value)}
+          autoComplete="username"
+          placeholder="opcional no modo senha única"
+          className="w-full text-base sm:text-sm px-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20 mb-3"
+        />
         <label className="block text-xs uppercase tracking-wide text-inkSoft mb-1.5">Senha</label>
         <input
           type="password"
@@ -676,6 +701,7 @@ function TelaLogin({ onEntrar }) {
           onChange={(e) => setSenha(e.target.value)}
           autoFocus
           required
+          autoComplete="current-password"
           className="w-full font-mono text-base sm:text-sm px-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
         />
         {erro && <p className="text-xs text-redStamp mt-2">{erro}</p>}
@@ -691,7 +717,7 @@ function TelaLogin({ onEntrar }) {
   );
 }
 
-function Masthead({ currentMonth, onPrev, onNext, onExport, onImportClick, onCategorias, onSair, ocupado }) {
+function Masthead({ currentMonth, usuario, papel, onPrev, onNext, onExport, onImportClick, onCategorias, onSair, ocupado, podeAlterar }) {
   return (
     <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 sm:gap-4 border-b-2 border-ink pb-3.5 mb-5">
       <div>
@@ -699,7 +725,8 @@ function Masthead({ currentMonth, onPrev, onNext, onExport, onImportClick, onCat
           Caderno de vendas
         </h1>
         <p className="text-xs text-inkSoft uppercase tracking-wide mt-1">
-          Registro mensal &middot; comissão de {(COMISSAO_TAXA * 100).toFixed(0)}%
+          {usuario ? `${usuario} · ${papel === "admin" ? "admin" : "visualização"}` : "Registro mensal"}
+          &middot; comissão de {(COMISSAO_TAXA * 100).toFixed(0)}%
           {ocupado && <span className="ml-2 normal-case tracking-normal">salvando…</span>}
         </p>
       </div>
@@ -732,20 +759,24 @@ function Masthead({ currentMonth, onPrev, onNext, onExport, onImportClick, onCat
           >
             ↓ Exportar<span className="hidden sm:inline"> JSON</span>
           </button>
-          <button
-            onClick={onImportClick}
-            title="Carregar um arquivo .json exportado anteriormente"
-            className="flex-1 sm:flex-none text-xs font-semibold px-3 py-2 sm:py-1.5 rounded-lg border border-cardBorder text-inkSoft hover:bg-paperStripe hover:border-inkFaint hover:text-ink whitespace-nowrap"
-          >
-            ↑ Importar<span className="hidden sm:inline"> JSON</span>
-          </button>
-          <button
-            onClick={onCategorias}
-            title="Criar, renomear ou excluir categorias"
-            className="text-xs font-semibold px-3 py-2 sm:py-1.5 rounded-lg border border-cardBorder text-inkSoft hover:bg-paperStripe hover:border-inkFaint hover:text-ink whitespace-nowrap"
-          >
-            Categorias
-          </button>
+          {podeAlterar && (
+            <button
+              onClick={onImportClick}
+              title="Carregar um arquivo .json exportado anteriormente"
+              className="flex-1 sm:flex-none text-xs font-semibold px-3 py-2 sm:py-1.5 rounded-lg border border-cardBorder text-inkSoft hover:bg-paperStripe hover:border-inkFaint hover:text-ink whitespace-nowrap"
+            >
+              ↑ Importar<span className="hidden sm:inline"> JSON</span>
+            </button>
+          )}
+          {podeAlterar && (
+            <button
+              onClick={onCategorias}
+              title="Criar, renomear ou excluir categorias"
+              className="text-xs font-semibold px-3 py-2 sm:py-1.5 rounded-lg border border-cardBorder text-inkSoft hover:bg-paperStripe hover:border-inkFaint hover:text-ink whitespace-nowrap"
+            >
+              Categorias
+            </button>
+          )}
           <button
             onClick={onSair}
             title="Sair"
@@ -759,7 +790,7 @@ function Masthead({ currentMonth, onPrev, onNext, onExport, onImportClick, onCat
   );
 }
 
-function Stats({ totalBruto, comissao, totalGorjetas, count, meta, pct, hit, onMetaChange }) {
+function Stats({ totalBruto, comissao, totalGorjetas, count, meta, pct, hit, onMetaChange, podeAlterar }) {
   const [metaDraft, setMetaDraft] = useState(meta || "");
 
   useEffect(() => {
@@ -811,10 +842,13 @@ function Stats({ totalBruto, comissao, totalGorjetas, count, meta, pct, hit, onM
           placeholder="0,00"
           value={metaDraft}
           onChange={(e) => setMetaDraft(e.target.value)}
-          onBlur={commit}
-          className="font-mono text-lg sm:text-xl font-semibold bg-transparent border-b border-dashed border-inkFaint focus:border-gold outline-none w-full pb-0.5"
+          onBlur={podeAlterar ? commit : undefined}
+          disabled={!podeAlterar}
+          className="font-mono text-lg sm:text-xl font-semibold bg-transparent border-b border-dashed border-inkFaint focus:border-gold outline-none w-full pb-0.5 disabled:opacity-60 disabled:cursor-not-allowed"
         />
-        <p className="text-[10.5px] text-inkFaint mt-1">Toque para definir a meta em R$</p>
+        <p className="text-[10.5px] text-inkFaint mt-1">
+          {podeAlterar ? "Toque para definir a meta em R$" : "Apenas administradores podem alterar a meta."}
+        </p>
         <div className="mt-2.5 h-1.5 bg-paperStripe rounded-full overflow-hidden">
           <div
             className={`h-full rounded-full transition-all ${hit ? "bg-greenStamp" : "bg-gold"}`}
@@ -1241,6 +1275,7 @@ function Ledger({
   monthLabel,
   filtroAtivo,
   onLimparFiltros,
+  podeAlterar,
 }) {
   return (
     <div className="bg-white border border-cardBorder rounded-[10px] shadow-sm overflow-hidden">
@@ -1263,12 +1298,14 @@ function Ledger({
             <>
               <p className="font-serif font-semibold text-base mb-1.5">Nenhuma venda registrada</p>
               <p className="text-sm text-inkSoft mb-4">Adicione a primeira venda de {monthLabel}.</p>
-              <button
-                onClick={onAddEmpty}
-                className="bg-ink text-paper text-sm font-semibold rounded-lg px-4 py-2.5 hover:bg-[#142A20]"
-              >
-                + Nova venda
-              </button>
+              {podeAlterar && (
+                <button
+                  onClick={onAddEmpty}
+                  className="bg-ink text-paper text-sm font-semibold rounded-lg px-4 py-2.5 hover:bg-[#142A20]"
+                >
+                  + Nova venda
+                </button>
+              )}
             </>
           )}
         </div>
@@ -1338,24 +1375,30 @@ function Ledger({
                   {fmtMoney(comissaoDe(v))}
                 </td>
                 <td className="align-top whitespace-nowrap px-1 sm:px-2 py-1.5 sm:py-2.5 border-b border-paperLine">
-                  <div className="flex items-center justify-end">
-                    <button
-                      onClick={() => onEdit(v)}
-                      aria-label="Editar venda"
-                      title="Editar venda"
-                      className="w-9 h-9 sm:w-7 sm:h-7 flex items-center justify-center text-inkFaint hover:text-ink hover:bg-paperStripe rounded text-sm"
-                    >
-                      ✎
-                    </button>
-                    <button
-                      onClick={() => onDelete(v.id)}
-                      aria-label="Excluir venda"
-                      title="Excluir venda"
-                      className="w-9 h-9 sm:w-7 sm:h-7 flex items-center justify-center text-inkFaint hover:text-redStamp hover:bg-[#FBEAE7] rounded text-base"
-                    >
-                      ×
-                    </button>
-                  </div>
+                  {podeAlterar ? (
+                    <div className="flex items-center justify-end">
+                      <button
+                        onClick={() => onEdit(v)}
+                        aria-label="Editar venda"
+                        title="Editar venda"
+                        className="w-9 h-9 sm:w-7 sm:h-7 flex items-center justify-center text-inkFaint hover:text-ink hover:bg-paperStripe rounded text-sm"
+                      >
+                        ✎
+                      </button>
+                      <button
+                        onClick={() => onDelete(v.id)}
+                        aria-label="Excluir venda"
+                        title="Excluir venda"
+                        className="w-9 h-9 sm:w-7 sm:h-7 flex items-center justify-center text-inkFaint hover:text-redStamp hover:bg-[#FBEAE7] rounded text-base"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-end text-[10px] uppercase tracking-wide text-inkFaint">
+                      leitura
+                    </div>
+                  )}
                 </td>
               </tr>
             ))}

@@ -1,4 +1,5 @@
 import {
+  exigirAdmin,
   exigirLogin,
   garantirSchema,
   getSql,
@@ -19,6 +20,7 @@ export default handler(async (req, res) => {
 
   // PUT define (ou apaga, se valor <= 0) a meta de um mês.
   if (req.method === "PUT") {
+    if (!exigirAdmin(req, res)) return;
     const mes = String(req.body?.mes || "");
     const valor = Number(req.body?.valor);
     if (!/^\d{4}-\d{2}$/.test(mes) || !Number.isFinite(valor) || valor < 0) {
