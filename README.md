@@ -17,8 +17,9 @@ entrar com a senha.
   abre os dois campos. Na lista, o nome aparece em destaque na venda e o telefone vira um link
   que abre o discador no celular. A busca também encontra por nome ou por telefone.
 - **Entrada do cliente** (opcional): o botão **+ Adicionar entrada do cliente** registra o sinal
-  já pago. O formulário e a lista mostram o total, a entrada e quanto **falta receber**. A entrada
-  não muda o total bruto, a meta nem a comissão — eles continuam sobre o valor cheio da venda.
+  já pago, que fica anotado no formulário e na lista abaixo do valor da venda. A entrada
+  **não paga comissão**: a taxa incide sobre o total menos a entrada (venda de R$ 200 com R$ 100
+  de entrada rende comissão sobre R$ 100). O total bruto e a meta continuam com o valor cheio.
 - **Forma de pagamento** (opcional): botões **Cartão** e **Pix** no formulário — dá para marcar
   um, o outro ou os dois juntos. Com os dois marcados dá para informar quanto foi em cada um
   (ex.: R$ 100 no cartão e R$ 200 no Pix); preenchendo um, o outro completa com o que falta do total.

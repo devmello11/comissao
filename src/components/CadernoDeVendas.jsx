@@ -37,9 +37,13 @@ function shiftMonth(key, delta) {
   const d = new Date(y, m - 1 + delta, 1);
   return ymKey(d);
 }
-/** Comissão da venda: a taxa sobre o valor + a gorjeta, que entra integral. */
+/**
+ * Comissão de uma linha: a taxa sobre o valor menos a entrada + a gorjeta, que entra integral.
+ * A entrada não paga comissão: venda de 200 com 100 de entrada rende comissão só sobre 100.
+ * Entrada e gorjeta ficam na primeira linha da venda, então é a soma das linhas que vale.
+ */
 function comissaoDe(v) {
-  return v.value * COMISSAO_TAXA + (v.bonus || 0);
+  return (v.value - (v.entrada || 0)) * COMISSAO_TAXA + (v.bonus || 0);
 }
 /**
  * Uma venda pode ter vários itens (kimono + faixa + no-gi). Cada item é uma linha vinda
@@ -71,7 +75,7 @@ function agrupaVendas(linhas) {
       // Quanto foi em cada forma, quando a venda foi dividida (ex.: 100 no cartão, 200 no Pix).
       valorCartao: v.itens.reduce((s, it) => s + (it.valorCartao || 0), 0),
       valorPix: v.itens.reduce((s, it) => s + (it.valorPix || 0), 0),
-      // Entrada que o cliente já pagou; o que falta receber é total - entrada.
+      // Entrada que o cliente já pagou — não entra na base da comissão.
       entrada: v.itens.reduce((s, it) => s + (it.entrada || 0), 0),
       // O cliente é da venda: vem repetido em todas as linhas, basta a primeira que tiver.
       cliente: v.itens.find((it) => it.cliente)?.cliente || "",
@@ -445,7 +449,9 @@ export default function CadernoDeVendas() {
 
   const totalBruto = useMemo(() => doMes.reduce((s, v) => s + v.value, 0), [doMes]);
   const totalGorjetas = useMemo(() => doMes.reduce((s, v) => s + (v.bonus || 0), 0), [doMes]);
-  const comissao = totalBruto * COMISSAO_TAXA + totalGorjetas;
+  const totalEntradas = useMemo(() => doMes.reduce((s, v) => s + (v.entrada || 0), 0), [doMes]);
+  // As entradas saem da base da comissão; o total bruto e a meta continuam com o valor cheio.
+  const comissao = (totalBruto - totalEntradas) * COMISSAO_TAXA + totalGorjetas;
   const meta = metas[currentMonth] || 0;
   const pct = meta > 0 ? Math.min(100, (totalBruto / meta) * 100) : 0;
   const hit = meta > 0 && totalBruto >= meta;
@@ -639,6 +645,7 @@ export default function CadernoDeVendas() {
           totalBruto={totalBruto}
           comissao={comissao}
           totalGorjetas={totalGorjetas}
+          totalEntradas={totalEntradas}
           count={vendasDoMes.length}
           meta={meta}
           pct={pct}
@@ -872,7 +879,7 @@ function Masthead({ currentMonth, usuario, papel, onPrev, onNext, onExport, onIm
   );
 }
 
-function Stats({ totalBruto, comissao, totalGorjetas, count, meta, pct, hit, onMetaChange, podeAlterar }) {
+function Stats({ totalBruto, comissao, totalGorjetas, totalEntradas, count, meta, pct, hit, onMetaChange, podeAlterar }) {
   const [metaDraft, setMetaDraft] = useState(meta || "");
 
   useEffect(() => {
@@ -903,9 +910,13 @@ function Stats({ totalBruto, comissao, totalGorjetas, count, meta, pct, hit, onM
           {fmtMoney(comissao)}
         </p>
         <p className="text-[11px] text-inkFaint mt-1">
-          {totalGorjetas > 0
-            ? `${fmtMoney(totalBruto * COMISSAO_TAXA)} do bruto + ${fmtMoney(totalGorjetas)} em gorjetas`
-            : "sobre o total bruto"}
+          {/* Diz de onde saiu o número: base (bruto menos entradas) e, se houver, as gorjetas. */}
+          {totalEntradas > 0
+            ? `sobre ${fmtMoney(totalBruto - totalEntradas)} (bruto menos ${fmtMoney(totalEntradas)} de entradas)`
+            : totalGorjetas > 0
+              ? `${fmtMoney(totalBruto * COMISSAO_TAXA)} do bruto`
+              : "sobre o total bruto"}
+          {totalGorjetas > 0 && ` + ${fmtMoney(totalGorjetas)} em gorjetas`}
         </p>
       </div>
 
@@ -1504,20 +1515,11 @@ function Ledger({
                         {rotuloPagamento(v.pagamento)}
                       </span>
                     ))}
-                  {/* Entrada e saldo são sempre da venda inteira, mesmo com filtro de categoria. */}
+                  {/* Só o valor da entrada: quem deu entrada já pagou, então não se mostra "falta". */}
                   {v.entrada > 0 && (
-                    <>
-                      <span className="block text-[11px] text-inkFaint">
-                        entrada {fmtMoney(v.entrada)}
-                      </span>
-                      {v.total - v.entrada > 0.004 ? (
-                        <span className="block text-[11px] font-semibold text-redStamp">
-                          falta {fmtMoney(v.total - v.entrada)}
-                        </span>
-                      ) : (
-                        <span className="block text-[11px] font-semibold text-greenStamp">quitado</span>
-                      )}
-                    </>
+                    <span className="block text-[11px] text-inkFaint">
+                      entrada {fmtMoney(v.entrada)}
+                    </span>
                   )}
                   {/* No celular a coluna Comissão some, então ela vem logo abaixo do valor. */}
                   <span className="block sm:hidden text-xs text-goldDeep mt-0.5">
@@ -1830,7 +1832,7 @@ function VendaModal({ venda, currentMonth, categorias, onCriarCategoria, onCance
   const [telefone, setTelefone] = useState(venda?.telefone || "");
   // Mesmo padrão da gorjeta: os campos do cliente só abrem quando pedidos (ou se já tem cliente).
   const [mostraCliente, setMostraCliente] = useState(Boolean(venda?.cliente || venda?.telefone));
-  // Entrada (sinal) que o cliente já pagou — abate do total para mostrar o que falta receber.
+  // Entrada (sinal) que o cliente já pagou. Sai da base da comissão; o total da venda não muda.
   const [valorEntrada, setValorEntrada] = useState(venda?.entrada ? String(venda.entrada) : "");
   const [mostraEntrada, setMostraEntrada] = useState(Boolean(venda?.entrada));
   // Formas de pagamento marcadas (ids). Pode ser nenhuma, uma ou as duas juntas.
@@ -1847,8 +1849,9 @@ function VendaModal({ venda, currentMonth, categorias, onCriarCategoria, onCance
   const varios = itens.length > 1;
   const bonus = mostraGorjeta ? parseFloat(gorjeta) || 0 : 0;
   const total = itens.reduce((s, it) => s + (parseFloat(it.valor) || 0), 0);
-  const comissaoPrevia = total * COMISSAO_TAXA + bonus;
   const entrada = mostraEntrada ? parseFloat(valorEntrada) || 0 : 0;
+  // A entrada não paga comissão: a taxa incide só sobre o que sobra do total.
+  const comissaoPrevia = Math.max(0, total - entrada) * COMISSAO_TAXA + bonus;
   const entradaPassou = entrada - total > 0.004;
   const dividido = formas.length > 1;
   const somaPagos = dividido
@@ -2340,8 +2343,7 @@ function VendaModal({ venda, currentMonth, categorias, onCriarCategoria, onCance
                 </p>
               ) : (
                 <p className="text-[11px] text-inkFaint mt-1">
-                  Abate do total para mostrar quanto falta receber. A comissão continua sobre o
-                  valor cheio da venda.
+                  A comissão é calculada só sobre o total menos a entrada.
                 </p>
               )}
             </div>
@@ -2365,20 +2367,10 @@ function VendaModal({ venda, currentMonth, categorias, onCriarCategoria, onCance
               </div>
             )}
             {entrada > 0 && (
-              <>
-                <div className="flex items-baseline justify-between mb-1">
-                  <span className="text-[11px] uppercase tracking-wide text-inkSoft">Entrada</span>
-                  <span className="font-mono text-sm">− {fmtMoney(entrada)}</span>
-                </div>
-                <div className="flex items-baseline justify-between mb-1.5 pb-1.5 border-b border-cardBorder">
-                  <span className="text-[11px] uppercase tracking-wide text-inkSoft">
-                    Falta receber
-                  </span>
-                  <span className="font-mono text-sm font-semibold">
-                    {fmtMoney(Math.max(0, total - entrada))}
-                  </span>
-                </div>
-              </>
+              <div className="flex items-baseline justify-between mb-1.5 pb-1.5 border-b border-cardBorder">
+                <span className="text-[11px] uppercase tracking-wide text-inkSoft">Entrada</span>
+                <span className="font-mono text-sm">{fmtMoney(entrada)}</span>
+              </div>
             )}
             <div className="flex items-baseline justify-between">
               <span className="text-[11px] uppercase tracking-wide text-inkSoft">
