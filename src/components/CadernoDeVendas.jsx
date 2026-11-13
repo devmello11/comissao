@@ -1430,7 +1430,11 @@ function Ledger({
               const itens = v.visiveis;
               const varios = itens.length > 1;
               const ocultos = v.itens.length - itens.length;
-              const valor = somaValor(itens);
+              // O valor mostrado é o que entrou depois da entrada: venda de 630 com 550 de
+              // entrada aparece como 80 (a mesma base da comissão). A entrada mora na primeira
+              // linha da venda, então só desconta quando esse item está visível.
+              const entradaVisivel = itens.reduce((s, it) => s + (it.entrada || 0), 0);
+              const valor = Math.max(0, somaValor(itens) - entradaVisivel);
               const comissao = somaComissao(itens);
               const gorjeta = somaGorjeta(itens);
               const notaOcultos =
@@ -1498,7 +1502,15 @@ function Ledger({
                   )}
                 </td>
                 <td className="font-mono align-top text-right text-sm whitespace-nowrap px-2.5 sm:px-3.5 py-2.5 border-b border-paperLine">
-                  {fmtMoney(valor)}
+                  <span
+                    title={
+                      v.entrada > 0
+                        ? `Venda de ${fmtMoney(v.total)} com ${fmtMoney(v.entrada)} de entrada`
+                        : undefined
+                    }
+                  >
+                    {fmtMoney(valor)}
+                  </span>
                   {ocultos > 0 && (
                     <span className="block text-[11px] text-inkFaint">de {fmtMoney(v.total)}</span>
                   )}
