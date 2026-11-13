@@ -7,11 +7,28 @@ entrar com a senha.
 ## Funcionalidades
 
 - Botão **+ Nova venda** para registrar data, categoria (opcional), descrição (opcional) e valor.
+- **Vários itens na mesma venda**: o botão **+ Adicionar outro item** no formulário junta, por
+  exemplo, um kimono novo + uma faixa + um item de No-GI numa venda só. Cada item tem categoria,
+  descrição e valor próprios; a data e a gorjeta são da venda. Na lista a venda aparece como uma
+  linha com o total, e cada item continua contando na sua categoria no resumo.
+  No banco cada item é uma linha de `vendas`, e as linhas da mesma venda compartilham a coluna
+  `grupo` (vazia nas vendas de um item só, como todas as anteriores a essa mudança).
+- **Cliente da venda** (opcional): o botão **+ Adicionar cliente (nome e telefone)** no formulário
+  abre os dois campos. Na lista, o nome aparece em destaque na venda e o telefone vira um link
+  que abre o discador no celular. A busca também encontra por nome ou por telefone.
+- **Entrada do cliente** (opcional): o botão **+ Adicionar entrada do cliente** registra o sinal
+  já pago. O formulário e a lista mostram o total, a entrada e quanto **falta receber**. A entrada
+  não muda o total bruto, a meta nem a comissão — eles continuam sobre o valor cheio da venda.
+- **Forma de pagamento** (opcional): botões **Cartão** e **Pix** no formulário — dá para marcar
+  um, o outro ou os dois juntos. Com os dois marcados dá para informar quanto foi em cada um
+  (ex.: R$ 100 no cartão e R$ 200 no Pix); preenchendo um, o outro completa com o que falta do total.
+  Aparece na lista abaixo do valor, e a busca acha por "pix" ou "cartão".
 - **Categorias** guardadas no banco (tabela `categorias`), semeada no primeiro acesso com
   Kimonos novos/usados/importados/Gracie Barra, No-GI e Protetores bucais.
-  Botão **+ Nova categoria** no formulário da venda cria e já seleciona a categoria — ela
-  aparece em qualquer aparelho e sobrevive mesmo sem nenhuma venda usando ela. O campo também
-  aceita texto livre. Grafias equivalentes ("no-gi" e "No-GI") são tratadas como a mesma.
+  No formulário da venda as categorias são botões: um toque escolhe, outro desmarca.
+  Botão **+ Nova categoria** cria e já seleciona a categoria — ela
+  aparece em qualquer aparelho e sobrevive mesmo sem nenhuma venda usando ela.
+  Grafias equivalentes ("no-gi" e "No-GI") são tratadas como a mesma.
 - Botão **Categorias** no cabeçalho abre o gerenciamento: criar, **renomear** e excluir.
   Renomear roda em transação e atualiza junto todas as vendas que usavam o nome antigo.
   Excluir só é permitido para categoria sem nenhuma venda — em uso, o app avisa quantas
@@ -89,8 +106,8 @@ Todas as rotas exigem o cookie de sessão criado pelo `POST /api/login`.
 | `/api/login`       | POST          | Recebe `{ usuario?, senha }` e cria a sessão (90 dias) |
 | `/api/logout`      | POST          | Encerra a sessão                               |
 | `/api/dados`       | GET, PUT      | Lê tudo; PUT substitui tudo (usado no importar)|
-| `/api/vendas`      | GET, POST     | Lista e cria vendas                            |
-| `/api/vendas/[id]` | PUT, DELETE   | Edita e exclui uma venda                       |
+| `/api/vendas`      | GET, POST     | Lista as linhas; POST cria uma venda com `{ date, bonus, itens: [...] }` |
+| `/api/vendas/[id]` | PUT, DELETE   | Edita e exclui uma venda inteira (todos os itens) |
 | `/api/metas`       | GET, PUT      | Lê metas; PUT grava a meta de um mês           |
 
 ## Estrutura

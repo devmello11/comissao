@@ -73,6 +73,28 @@ export function garantirSchema() {
       ALTER TABLE vendas
       ADD COLUMN IF NOT EXISTS category TEXT NOT NULL DEFAULT ''
     `;
+    // Venda com vários itens: cada item é uma linha desta tabela, e as linhas da mesma
+    // venda compartilham "grupo". Venda de um item só (todas as antigas) fica com grupo
+    // NULL — por isso a migração é só aditiva e não toca em nenhuma linha existente.
+    await sql`ALTER TABLE vendas ADD COLUMN IF NOT EXISTS grupo TEXT`;
+    // Posição do item dentro da venda (as linhas nascem na mesma transação, então
+    // created_at empata e não serve para ordenar).
+    await sql`ALTER TABLE vendas ADD COLUMN IF NOT EXISTS ordem INTEGER NOT NULL DEFAULT 0`;
+    // Cliente da venda (opcionais). São da venda inteira, então ficam repetidos em
+    // todas as linhas dela. Vendas antigas ficam com os dois vazios.
+    await sql`ALTER TABLE vendas ADD COLUMN IF NOT EXISTS cliente TEXT NOT NULL DEFAULT ''`;
+    await sql`ALTER TABLE vendas ADD COLUMN IF NOT EXISTS telefone TEXT NOT NULL DEFAULT ''`;
+    // Entrada (sinal) que o cliente já pagou. É da venda inteira e fica gravada na
+    // primeira linha, igual à gorjeta. Não muda o valor da venda nem a comissão:
+    // serve para mostrar quanto ainda falta receber.
+    await sql`ALTER TABLE vendas ADD COLUMN IF NOT EXISTS entrada NUMERIC(12, 2) NOT NULL DEFAULT 0`;
+    // Forma de pagamento da venda: "", "cartao", "pix" ou "cartao+pix" (as duas juntas).
+    // É da venda inteira, repetida em todas as linhas dela. Vendas antigas ficam vazias.
+    await sql`ALTER TABLE vendas ADD COLUMN IF NOT EXISTS pagamento TEXT NOT NULL DEFAULT ''`;
+    // Quanto foi pago em cada forma quando a venda é dividida (ex.: 100 no cartão e 200
+    // no Pix). São da venda inteira e ficam na primeira linha, como a entrada.
+    await sql`ALTER TABLE vendas ADD COLUMN IF NOT EXISTS valor_cartao NUMERIC(12, 2) NOT NULL DEFAULT 0`;
+    await sql`ALTER TABLE vendas ADD COLUMN IF NOT EXISTS valor_pix NUMERIC(12, 2) NOT NULL DEFAULT 0`;
     await sql`
       CREATE TABLE IF NOT EXISTS metas (
         mes   TEXT PRIMARY KEY,
@@ -302,8 +324,19 @@ export function normalizaVenda(row) {
     value: Number(row.value),
     bonus: Number(row.bonus || 0),
     category: row.category || "",
+    grupo: row.grupo || null,
+    ordem: Number(row.ordem || 0),
+    cliente: row.cliente || "",
+    telefone: row.telefone || "",
+    entrada: Number(row.entrada || 0),
+    pagamento: row.pagamento || "",
+    // No banco as colunas são valor_cartao/valor_pix; no backup JSON já vêm como valorCartao/valorPix.
+    valorCartao: Number(row.valor_cartao ?? row.valorCartao ?? 0),
+    valorPix: Number(row.valor_pix ?? row.valorPix ?? 0),
   };
 }
+
+const FORMAS_PAGAMENTO = ["cartao", "pix"];
 
 /** Valida os campos vindos do cliente. Devolve {ok, dados} ou {ok:false, erro}. */
 export function validaVenda(body) {
@@ -323,5 +356,98 @@ export function validaVenda(body) {
   const description = String(body?.description || "").slice(0, 300);
   // Categoria é opcional — venda sem categoria fica como "" e aparece como "Sem categoria".
   const category = String(body?.category || "").trim().replace(/\s+/g, " ").slice(0, 60);
-  return { ok: true, dados: { date, description, value, bonus, category } };
+  // Só vêm preenchidos no "Importar JSON" — é o que mantém os itens de uma venda juntos no backup.
+  const grupo = body?.grupo ? String(body.grupo).slice(0, 100) : null;
+  const ordemBruta = Number(body?.ordem);
+  const ordem = Number.isInteger(ordemBruta) && ordemBruta >= 0 ? ordemBruta : 0;
+  // Nome e telefone do cliente: opcionais e livres (telefone não é validado — tem quem
+  // anote com DDD, sem DDD, de fora do país ou "o mesmo da esposa").
+  const cliente = String(body?.cliente || "").trim().replace(/\s+/g, " ").slice(0, 120);
+  const telefone = String(body?.telefone || "").trim().replace(/\s+/g, " ").slice(0, 40);
+  // Entrada é opcional: ausente vale 0. Só não pode ser negativa.
+  const entrada = body?.entrada === "" || body?.entrada == null ? 0 : Number(body.entrada);
+  if (!Number.isFinite(entrada) || entrada < 0) {
+    return { ok: false, erro: "entrada_invalida" };
+  }
+  // Forma de pagamento: opcional. Aceita "pix", "cartao+pix" ou ["cartao", "pix"] e grava
+  // sempre na mesma ordem; qualquer valor desconhecido é ignorado.
+  const formasPedidas = (
+    Array.isArray(body?.pagamento) ? body.pagamento : String(body?.pagamento || "").split("+")
+  ).map((f) => String(f).trim().toLowerCase());
+  const pagamento = FORMAS_PAGAMENTO.filter((f) => formasPedidas.includes(f)).join("+");
+  // Valor em cada forma: só faz sentido com as duas marcadas (pagamento dividido).
+  // Com uma forma só, ela vale pela venda inteira e os dois ficam 0.
+  const dividido = pagamento === "cartao+pix";
+  const valorCartao = dividido && body?.valorCartao !== "" && body?.valorCartao != null ? Number(body.valorCartao) : 0;
+  const valorPix = dividido && body?.valorPix !== "" && body?.valorPix != null ? Number(body.valorPix) : 0;
+  if (!Number.isFinite(valorCartao) || valorCartao < 0 || !Number.isFinite(valorPix) || valorPix < 0) {
+    return { ok: false, erro: "valor_pagamento_invalido" };
+  }
+  return {
+    ok: true,
+    dados: {
+      date, description, value, bonus, category, grupo, ordem, cliente, telefone, entrada, pagamento,
+      valorCartao, valorPix,
+    },
+  };
+}
+
+const MAX_ITENS = 50;
+
+/**
+ * Valida uma venda inteira: { date, bonus, itens: [{ category, description, value }] }.
+ * Também aceita o formato antigo, de um item só ({ date, description, value, bonus, category }),
+ * e avisa em "legado" para a rota responder no formato que aquele cliente espera.
+ * A gorjeta é da venda, não do item: fica gravada na primeira linha.
+ */
+export function validaVendaComItens(body) {
+  const legado = !Array.isArray(body?.itens);
+  const brutos = legado ? [body] : body.itens;
+  if (brutos.length === 0) return { ok: false, erro: "venda_sem_itens" };
+  if (brutos.length > MAX_ITENS) return { ok: false, erro: "itens_demais" };
+
+  const itens = [];
+  for (let i = 0; i < brutos.length; i++) {
+    const r = validaVenda({
+      date: body?.date,
+      bonus: i === 0 ? body?.bonus : 0,
+      value: brutos[i]?.value,
+      description: brutos[i]?.description,
+      category: brutos[i]?.category,
+      cliente: body?.cliente,
+      telefone: body?.telefone,
+      entrada: i === 0 ? body?.entrada : 0,
+      pagamento: body?.pagamento,
+      valorCartao: i === 0 ? body?.valorCartao : 0,
+      valorPix: i === 0 ? body?.valorPix : 0,
+    });
+    if (!r.ok) return r;
+    itens.push(r.dados);
+  }
+  // Cartão + Pix não pode somar mais que a venda (pode somar menos: o resto ainda a receber).
+  const pagoCentavos = Math.round((itens[0].valorCartao + itens[0].valorPix) * 100);
+  if (pagoCentavos > Math.round(itens.reduce((s, it) => s + it.value, 0) * 100)) {
+    return { ok: false, erro: "pagamento_maior_que_total" };
+  }
+  // A entrada abate do total da venda, então não pode passar dele (compara em centavos).
+  const totalCentavos = Math.round(itens.reduce((s, it) => s + it.value, 0) * 100);
+  if (Math.round(itens[0].entrada * 100) > totalCentavos) {
+    return { ok: false, erro: "entrada_maior_que_total" };
+  }
+  return { ok: true, itens, legado };
+}
+
+/**
+ * Transforma os itens validados nas linhas a gravar. "chave" identifica a venda:
+ * é o id da primeira linha e, quando há mais de um item, o grupo de todas elas.
+ * Venda de um item só fica com grupo NULL, igualzinha às vendas antigas.
+ */
+export function linhasDaVenda(chave, itens) {
+  const grupo = itens.length > 1 ? chave : null;
+  return itens.map((item, i) => ({
+    ...item,
+    id: i === 0 ? chave : crypto.randomUUID(),
+    grupo,
+    ordem: i,
+  }));
 }

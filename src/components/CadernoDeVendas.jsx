@@ -41,6 +41,57 @@ function shiftMonth(key, delta) {
 function comissaoDe(v) {
   return v.value * COMISSAO_TAXA + (v.bonus || 0);
 }
+/**
+ * Uma venda pode ter vários itens (kimono + faixa + no-gi). Cada item é uma linha vinda
+ * do banco, e as linhas da mesma venda compartilham "grupo". Venda de um item só — caso
+ * de todo o histórico antigo — não tem grupo: a chave dela é o próprio id.
+ */
+function chaveVenda(linha) {
+  return linha.grupo || linha.id;
+}
+const somaValor = (linhas) => linhas.reduce((s, l) => s + l.value, 0);
+const somaGorjeta = (linhas) => linhas.reduce((s, l) => s + (l.bonus || 0), 0);
+const somaComissao = (linhas) => linhas.reduce((s, l) => s + comissaoDe(l), 0);
+
+/** Junta as linhas em vendas: { key, date, itens, total, bonus }, na ordem em que aparecem. */
+function agrupaVendas(linhas) {
+  const mapa = new Map();
+  for (const l of linhas) {
+    const key = chaveVenda(l);
+    if (!mapa.has(key)) mapa.set(key, { key, date: l.date, itens: [] });
+    mapa.get(key).itens.push(l);
+  }
+  return [...mapa.values()].map((v) => {
+    v.itens.sort((a, b) => (a.ordem || 0) - (b.ordem || 0));
+    return {
+      ...v,
+      total: somaValor(v.itens),
+      bonus: somaGorjeta(v.itens),
+      pagamento: v.itens.find((it) => it.pagamento)?.pagamento || "",
+      // Quanto foi em cada forma, quando a venda foi dividida (ex.: 100 no cartão, 200 no Pix).
+      valorCartao: v.itens.reduce((s, it) => s + (it.valorCartao || 0), 0),
+      valorPix: v.itens.reduce((s, it) => s + (it.valorPix || 0), 0),
+      // Entrada que o cliente já pagou; o que falta receber é total - entrada.
+      entrada: v.itens.reduce((s, it) => s + (it.entrada || 0), 0),
+      // O cliente é da venda: vem repetido em todas as linhas, basta a primeira que tiver.
+      cliente: v.itens.find((it) => it.cliente)?.cliente || "",
+      telefone: v.itens.find((it) => it.telefone)?.telefone || "",
+    };
+  });
+}
+// Formas de pagamento. A venda guarda "", "cartao", "pix" ou "cartao+pix" (as duas juntas).
+// "campo" é onde fica o valor pago naquela forma quando a venda é dividida entre as duas.
+const FORMAS_PAGAMENTO = [
+  { id: "cartao", nome: "Cartão", campo: "valorCartao" },
+  { id: "pix", nome: "Pix", campo: "valorPix" },
+];
+/** "cartao+pix" → "Cartão + Pix". Vazio continua vazio. */
+function rotuloPagamento(pagamento) {
+  const marcadas = String(pagamento || "").split("+");
+  return FORMAS_PAGAMENTO.filter((f) => marcadas.includes(f.id))
+    .map((f) => f.nome)
+    .join(" + ");
+}
 /** Tira acento e caixa pra "balcao" achar "Balcão". */
 function normaliza(s) {
   return String(s || "")
@@ -328,30 +379,52 @@ export default function CadernoDeVendas() {
     return [...acc.values()].sort((a, b) => b.bruto - a.bruto);
   }, [doMes]);
 
-  // O que a tabela mostra: o mês já filtrado e ordenado.
+  // As linhas do mês juntas em vendas (uma venda pode ter vários itens).
+  const vendasDoMes = useMemo(() => agrupaVendas(doMes), [doMes]);
+
+  // O que a tabela mostra: as vendas do mês já filtradas e ordenadas.
+  // Dia, faixa de valor, gorjeta e busca olham a venda inteira. Já a categoria recorta
+  // os itens: numa venda de kimono + faixa, filtrar "Kimonos novos" mostra só o kimono,
+  // e o subtotal bate com a fatia do gráfico. "visiveis" são os itens que passaram.
   const list = useMemo(() => {
     const busca = normaliza(filtros.busca).trim();
     const min = paraNumero(filtros.valorMin);
     const max = paraNumero(filtros.valorMax);
 
-    const filtrado = doMes.filter((v) => {
-      const cat = (v.category || "").trim();
-      if (filtros.dia && v.date !== filtros.dia) return false;
-      if (busca && !normaliza(v.description + " " + cat).includes(busca)) return false;
-      if (min !== null && v.value < min) return false;
-      if (max !== null && v.value > max) return false;
-      if (filtros.soGorjeta && !(v.bonus > 0)) return false;
-      if (filtros.categoria === SEM_CATEGORIA && cat) return false;
-      if (filtros.categoria && filtros.categoria !== SEM_CATEGORIA) {
-        if (normaliza(cat) !== normaliza(filtros.categoria)) return false;
+    const filtrado = [];
+    for (const venda of vendasDoMes) {
+      if (filtros.dia && venda.date !== filtros.dia) continue;
+      if (min !== null && venda.total < min) continue;
+      if (max !== null && venda.total > max) continue;
+      if (filtros.soGorjeta && !(venda.bonus > 0)) continue;
+      if (busca) {
+        // Buscar "pix" ou "cartao" também acha pela forma de pagamento.
+        const achouNoCliente = normaliza(
+          venda.cliente + " " + venda.telefone + " " + rotuloPagamento(venda.pagamento)
+        ).includes(busca);
+        // Telefone também acha só pelos dígitos: "11999" encontra "(11) 99999-0000".
+        const digitos = busca.replace(/\D/g, "");
+        const achouNoTelefone =
+          digitos.length >= 3 && venda.telefone.replace(/\D/g, "").includes(digitos);
+        const achouNoItem = venda.itens.some((it) =>
+          normaliza(it.description + " " + (it.category || "")).includes(busca)
+        );
+        if (!achouNoCliente && !achouNoTelefone && !achouNoItem) continue;
       }
-      return true;
-    });
+      const visiveis = venda.itens.filter((it) => {
+        const cat = (it.category || "").trim();
+        if (filtros.categoria === SEM_CATEGORIA) return !cat;
+        if (filtros.categoria) return normaliza(cat) === normaliza(filtros.categoria);
+        return true;
+      });
+      if (visiveis.length === 0) continue;
+      filtrado.push({ ...venda, visiveis });
+    }
 
     filtrado.sort((a, b) => (a.date === b.date ? 0 : a.date < b.date ? -1 : 1));
     if (!sortAsc) filtrado.reverse();
     return filtrado;
-  }, [doMes, filtros, sortAsc]);
+  }, [vendasDoMes, filtros, sortAsc]);
 
   const filtroAtivo =
     filtros.busca.trim() !== "" ||
@@ -364,8 +437,8 @@ export default function CadernoDeVendas() {
   // Subtotal do que está filtrado, pra responder "quanto deu só esse recorte".
   const subtotal = useMemo(
     () => ({
-      bruto: list.reduce((s, v) => s + v.value, 0),
-      comissao: list.reduce((s, v) => s + comissaoDe(v), 0),
+      bruto: list.reduce((s, v) => s + somaValor(v.visiveis), 0),
+      comissao: list.reduce((s, v) => s + somaComissao(v.visiveis), 0),
     }),
     [list]
   );
@@ -378,42 +451,51 @@ export default function CadernoDeVendas() {
   const hit = meta > 0 && totalBruto >= meta;
   const ehAdmin = perfil.papel === "admin";
 
+  // "dados" é a venda inteira: { date, bonus, itens: [{ category, description, value }] }.
+  // A API devolve as linhas gravadas, uma por item.
   async function addVenda(dados) {
-    let criada = null;
+    let linhas = null;
     const ok = await comApi(async () => {
-      criada = await api.criarVenda(dados);
-      setVendas((prev) => [...prev, criada]);
-      setCurrentMonth(criada.date.slice(0, 7));
+      linhas = await api.criarVenda(dados);
+      setVendas((prev) => [...prev, ...linhas]);
+      setCurrentMonth(linhas[0].date.slice(0, 7));
     });
     if (ok) {
       setModal(null);
       avisar(
-        `Venda de ${fmtMoney(criada.value)} salva`,
-        `${fmtDate(criada.date)} · comissão ${fmtMoney(comissaoDe(criada))}`
+        `Venda de ${fmtMoney(somaValor(linhas))} salva`,
+        `${fmtDate(linhas[0].date)} · ${linhas.length > 1 ? `${linhas.length} itens · ` : ""}comissão ${fmtMoney(somaComissao(linhas))}`
       );
     }
   }
 
-  async function updateVenda(id, dados) {
-    let atualizada = null;
+  async function updateVenda(key, dados) {
+    let linhas = null;
     const ok = await comApi(async () => {
-      atualizada = await api.atualizarVenda(id, dados);
-      setVendas((prev) => prev.map((v) => (v.id === id ? atualizada : v)));
-      setCurrentMonth(atualizada.date.slice(0, 7));
+      linhas = await api.atualizarVenda(key, dados);
+      // Troca as linhas antigas da venda pelas novas, no mesmo lugar da lista.
+      setVendas((prev) => {
+        const onde = prev.findIndex((v) => chaveVenda(v) === key);
+        const resto = prev.filter((v) => chaveVenda(v) !== key);
+        if (onde === -1) return [...resto, ...linhas];
+        // "onde" é a primeira linha da venda, então tudo antes dela continua em "resto".
+        return [...resto.slice(0, onde), ...linhas, ...resto.slice(onde)];
+      });
+      setCurrentMonth(linhas[0].date.slice(0, 7));
     });
     if (ok) {
       setModal(null);
       avisar(
         "Venda atualizada",
-        `${fmtDate(atualizada.date)} · ${fmtMoney(atualizada.value)} · comissão ${fmtMoney(comissaoDe(atualizada))}`
+        `${fmtDate(linhas[0].date)} · ${fmtMoney(somaValor(linhas))} · comissão ${fmtMoney(somaComissao(linhas))}`
       );
     }
   }
 
-  async function deleteVenda(id) {
+  async function deleteVenda(key) {
     await comApi(async () => {
-      await api.excluirVenda(id);
-      setVendas((prev) => prev.filter((v) => v.id !== id));
+      await api.excluirVenda(key);
+      setVendas((prev) => prev.filter((v) => chaveVenda(v) !== key));
     });
   }
 
@@ -557,7 +639,7 @@ export default function CadernoDeVendas() {
           totalBruto={totalBruto}
           comissao={comissao}
           totalGorjetas={totalGorjetas}
-          count={doMes.length}
+          count={vendasDoMes.length}
           meta={meta}
           pct={pct}
           hit={hit}
@@ -582,7 +664,7 @@ export default function CadernoDeVendas() {
             <div className="flex items-center gap-2">
               {!vendasAberto && (
                 <span className="text-[11px] text-inkFaint">
-                  {doMes.length} venda{doMes.length === 1 ? "" : "s"}
+                  {vendasDoMes.length} venda{vendasDoMes.length === 1 ? "" : "s"}
                 </span>
               )}
               {ehAdmin && (
@@ -606,7 +688,7 @@ export default function CadernoDeVendas() {
             ativo={filtroAtivo}
             onLimpar={() => setFiltros(FILTROS_VAZIOS)}
             resultados={list.length}
-            totalDoMes={doMes.length}
+            totalDoMes={vendasDoMes.length}
             subtotal={subtotal}
             categoriasDoMes={categoriasDoMes}
             currentMonth={currentMonth}
@@ -639,14 +721,14 @@ export default function CadernoDeVendas() {
       )}
       {ehAdmin && modal && (
         <VendaModal
-          key={modal.mode === "edit" ? modal.venda.id : "add"}
+          key={modal.mode === "edit" ? modal.venda.key : "add"}
           venda={modal.mode === "edit" ? modal.venda : null}
           currentMonth={currentMonth}
           onCancel={() => setModal(null)}
           categorias={categoriasConhecidas}
           onCriarCategoria={criarCategoria}
           onSave={(dados) =>
-            modal.mode === "edit" ? updateVenda(modal.venda.id, dados) : addVenda(dados)
+            modal.mode === "edit" ? updateVenda(modal.venda.key, dados) : addVenda(dados)
           }
         />
       )}
@@ -1151,7 +1233,7 @@ function Filtros({
                 type="search"
                 value={filtros.busca}
                 onChange={(e) => set("busca")(e.target.value)}
-                placeholder="Descrição ou categoria"
+                placeholder="Cliente, telefone, descrição ou categoria"
                 className={`${campo} ${marcado(filtros.busca.trim() !== "")} pl-8`}
               />
             </div>
@@ -1332,47 +1414,118 @@ function Ledger({
             </tr>
           </thead>
           <tbody>
-            {list.map((v, i) => (
-              <tr key={v.id} className={i % 2 === 1 ? "bg-paperStripe" : ""}>
+            {list.map((v, i) => {
+              // "itens" são os que passaram no filtro; sem filtro de categoria, são todos.
+              const itens = v.visiveis;
+              const varios = itens.length > 1;
+              const ocultos = v.itens.length - itens.length;
+              const valor = somaValor(itens);
+              const comissao = somaComissao(itens);
+              const gorjeta = somaGorjeta(itens);
+              const notaOcultos =
+                ocultos > 0 ? `+ ${ocultos} ite${ocultos === 1 ? "m" : "ns"} fora do filtro` : "";
+              return (
+              <tr key={v.key} className={i % 2 === 1 ? "bg-paperStripe" : ""}>
                 <td className="align-top text-sm px-2.5 sm:px-3.5 py-2.5 border-b border-paperLine">
                   <span className="font-mono whitespace-nowrap">{fmtDate(v.date)}</span>
                   {/* A coluna Descrição some no celular, então ela reaparece aqui embaixo da data. */}
-                  {(v.description || v.bonus > 0 || v.category) && (
-                    <span className="block sm:hidden text-xs text-inkSoft mt-0.5 break-words">
-                      {v.category && (
-                        <span className="block text-ink font-medium">{v.category}</span>
-                      )}
-                      {v.description}
-                      {v.bonus > 0 && (
-                        <span className="block text-goldDeep font-mono text-[10px] uppercase tracking-wide mt-0.5 whitespace-nowrap">
-                          + gorjeta {fmtMoney(v.bonus)}
-                        </span>
-                      )}
-                    </span>
-                  )}
+                  <span className="block sm:hidden text-xs text-inkSoft break-words">
+                    <ClienteDaVenda venda={v} className="block mt-0.5" />
+                    {itens.map((it) => (
+                      <span key={it.id} className={`block ${varios ? "mt-1.5" : "mt-0.5"}`}>
+                        {it.category && (
+                          <span className="block text-ink font-medium">{it.category}</span>
+                        )}
+                        {it.description}
+                        {/* Com vários itens, cada um mostra o próprio valor; o total fica na coluna ao lado. */}
+                        {varios && (
+                          <span className="block font-mono text-[11px] text-inkFaint">
+                            {fmtMoney(it.value)}
+                          </span>
+                        )}
+                      </span>
+                    ))}
+                    {notaOcultos && (
+                      <span className="block text-[11px] text-inkFaint italic mt-1">{notaOcultos}</span>
+                    )}
+                    {gorjeta > 0 && (
+                      <span className="block text-goldDeep font-mono text-[10px] uppercase tracking-wide mt-0.5 whitespace-nowrap">
+                        + gorjeta {fmtMoney(gorjeta)}
+                      </span>
+                    )}
+                  </span>
                 </td>
                 <td className="hidden sm:table-cell align-top text-sm text-inkSoft px-3.5 py-2.5 border-b border-paperLine">
-                  {v.category && (
-                    <span className="inline-block text-[11px] text-ink bg-paperStripe border border-cardBorder rounded px-1.5 py-0.5 mr-1.5 whitespace-nowrap">
-                      {v.category}
-                    </span>
-                  )}
-                  {v.description || (v.category ? "" : "—")}
-                  {v.bonus > 0 && (
-                    <span className="ml-1.5 font-mono text-[10px] uppercase tracking-wide text-goldDeep border border-gold rounded px-1 py-0.5 whitespace-nowrap">
-                      gorjeta {fmtMoney(v.bonus)}
-                    </span>
+                  <ClienteDaVenda venda={v} className="block mb-1" />
+                  {itens.map((it) => (
+                    <div
+                      key={it.id}
+                      className={varios ? "flex items-baseline gap-2 mb-1.5 last:mb-0" : ""}
+                    >
+                      <span className={varios ? "min-w-0 flex-1" : ""}>
+                        {it.category && (
+                          <span className="inline-block text-[11px] text-ink bg-paperStripe border border-cardBorder rounded px-1.5 py-0.5 mr-1.5 whitespace-nowrap">
+                            {it.category}
+                          </span>
+                        )}
+                        {it.description || (it.category ? "" : "—")}
+                        {it.bonus > 0 && (
+                          <span className="ml-1.5 font-mono text-[10px] uppercase tracking-wide text-goldDeep border border-gold rounded px-1 py-0.5 whitespace-nowrap">
+                            gorjeta {fmtMoney(it.bonus)}
+                          </span>
+                        )}
+                      </span>
+                      {varios && (
+                        <span className="font-mono text-xs text-inkFaint whitespace-nowrap shrink-0">
+                          {fmtMoney(it.value)}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                  {notaOcultos && (
+                    <div className="text-[11px] text-inkFaint italic mt-1">{notaOcultos}</div>
                   )}
                 </td>
                 <td className="font-mono align-top text-right text-sm whitespace-nowrap px-2.5 sm:px-3.5 py-2.5 border-b border-paperLine">
-                  {fmtMoney(v.value)}
+                  {fmtMoney(valor)}
+                  {ocultos > 0 && (
+                    <span className="block text-[11px] text-inkFaint">de {fmtMoney(v.total)}</span>
+                  )}
+                  {v.pagamento &&
+                    (v.valorCartao > 0 || v.valorPix > 0 ? (
+                      // Pagamento dividido com valores: uma linha por forma.
+                      FORMAS_PAGAMENTO.filter((f) => v[f.campo] > 0).map((f) => (
+                        <span key={f.id} className="block text-[11px] text-inkSoft">
+                          <span className="font-sans">{f.nome}</span> {fmtMoney(v[f.campo])}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="block font-sans text-[11px] text-inkSoft">
+                        {rotuloPagamento(v.pagamento)}
+                      </span>
+                    ))}
+                  {/* Entrada e saldo são sempre da venda inteira, mesmo com filtro de categoria. */}
+                  {v.entrada > 0 && (
+                    <>
+                      <span className="block text-[11px] text-inkFaint">
+                        entrada {fmtMoney(v.entrada)}
+                      </span>
+                      {v.total - v.entrada > 0.004 ? (
+                        <span className="block text-[11px] font-semibold text-redStamp">
+                          falta {fmtMoney(v.total - v.entrada)}
+                        </span>
+                      ) : (
+                        <span className="block text-[11px] font-semibold text-greenStamp">quitado</span>
+                      )}
+                    </>
+                  )}
                   {/* No celular a coluna Comissão some, então ela vem logo abaixo do valor. */}
                   <span className="block sm:hidden text-xs text-goldDeep mt-0.5">
-                    {fmtMoney(comissaoDe(v))}
+                    {fmtMoney(comissao)}
                   </span>
                 </td>
                 <td className="hidden sm:table-cell font-mono align-top text-right text-sm text-goldDeep whitespace-nowrap px-3.5 py-2.5 border-b border-paperLine">
-                  {fmtMoney(comissaoDe(v))}
+                  {fmtMoney(comissao)}
                 </td>
                 <td className="align-top whitespace-nowrap px-1 sm:px-2 py-1.5 sm:py-2.5 border-b border-paperLine">
                   {podeAlterar ? (
@@ -1386,7 +1539,7 @@ function Ledger({
                         ✎
                       </button>
                       <button
-                        onClick={() => onDelete(v.id)}
+                        onClick={() => onDelete(v.key)}
                         aria-label="Excluir venda"
                         title="Excluir venda"
                         className="w-9 h-9 sm:w-7 sm:h-7 flex items-center justify-center text-inkFaint hover:text-redStamp hover:bg-[#FBEAE7] rounded text-base"
@@ -1401,11 +1554,32 @@ function Ledger({
                   )}
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       )}
     </div>
+  );
+}
+
+/** Nome e telefone do cliente na linha da venda. Não renderiza nada se a venda não tem cliente. */
+function ClienteDaVenda({ venda, className = "" }) {
+  if (!venda.cliente && !venda.telefone) return null;
+  return (
+    <span className={`text-xs ${className}`}>
+      {venda.cliente && <span className="text-ink font-semibold">{venda.cliente}</span>}
+      {venda.cliente && venda.telefone && <span className="text-inkFaint"> · </span>}
+      {venda.telefone && (
+        // tel: abre o discador no celular com o número já preenchido.
+        <a
+          href={`tel:${venda.telefone.replace(/[^\d+]/g, "")}`}
+          className="font-mono text-inkSoft underline decoration-dotted hover:text-ink whitespace-nowrap"
+        >
+          {venda.telefone}
+        </a>
+      )}
+    </span>
   );
 }
 
@@ -1624,42 +1798,99 @@ function GerenciarCategorias({ categorias, usos, ocupado, onCriar, onRenomear, o
   );
 }
 
+let proximoUidItem = 0;
+/** Item do formulário. "uid" só existe na tela, para o React acompanhar cada bloco. */
+function novoItemForm(linha) {
+  return {
+    uid: ++proximoUidItem,
+    categoria: linha?.category || "",
+    descricao: linha?.description || "",
+    valor: linha ? String(linha.value) : "",
+  };
+}
+
 function VendaModal({ venda, currentMonth, categorias, onCriarCategoria, onCancel, onSave }) {
   const editando = Boolean(venda);
   const today = new Date();
   const defaultDate = ymKey(today) === currentMonth ? today.toISOString().slice(0, 10) : `${currentMonth}-01`;
   const [date, setDate] = useState(venda ? venda.date : defaultDate);
-  const [description, setDescription] = useState(venda ? venda.description || "" : "");
-  const [categoria, setCategoria] = useState(venda ? venda.category || "" : "");
-  const [criandoCat, setCriandoCat] = useState(false);
+  // Uma venda nasce com um item; o botão "+ Adicionar outro item" acrescenta os demais.
+  const [itens, setItens] = useState(() =>
+    venda ? venda.itens.map(novoItemForm) : [novoItemForm()]
+  );
+  const [criandoCat, setCriandoCat] = useState(null); // uid do item que está criando categoria
   const [novaCat, setNovaCat] = useState("");
   const [salvandoCat, setSalvandoCat] = useState(false);
   const [erroCat, setErroCat] = useState("");
-  const [valor, setValor] = useState(venda ? String(venda.value) : "");
   const [gorjeta, setGorjeta] = useState(venda?.bonus ? String(venda.bonus) : "");
   // O campo de gorjeta fica escondido até o usuário pedir — na maioria das vendas não tem.
   const [mostraGorjeta, setMostraGorjeta] = useState(Boolean(venda?.bonus));
   const [enviando, setEnviando] = useState(false);
+  const [cliente, setCliente] = useState(venda?.cliente || "");
+  const [telefone, setTelefone] = useState(venda?.telefone || "");
+  // Mesmo padrão da gorjeta: os campos do cliente só abrem quando pedidos (ou se já tem cliente).
+  const [mostraCliente, setMostraCliente] = useState(Boolean(venda?.cliente || venda?.telefone));
+  // Entrada (sinal) que o cliente já pagou — abate do total para mostrar o que falta receber.
+  const [valorEntrada, setValorEntrada] = useState(venda?.entrada ? String(venda.entrada) : "");
+  const [mostraEntrada, setMostraEntrada] = useState(Boolean(venda?.entrada));
+  // Formas de pagamento marcadas (ids). Pode ser nenhuma, uma ou as duas juntas.
+  const [formas, setFormas] = useState(() =>
+    String(venda?.pagamento || "").split("+").filter(Boolean)
+  );
+  // Com as duas formas marcadas, quanto foi em cada uma: { cartao: "100", pix: "200" }.
+  const [valoresPagos, setValoresPagos] = useState(() =>
+    Object.fromEntries(
+      FORMAS_PAGAMENTO.map((f) => [f.id, venda?.[f.campo] ? String(venda[f.campo]) : ""])
+    )
+  );
 
+  const varios = itens.length > 1;
   const bonus = mostraGorjeta ? parseFloat(gorjeta) || 0 : 0;
-  const value = parseFloat(valor);
-  const comissaoPrevia = (isNaN(value) ? 0 : value) * COMISSAO_TAXA + bonus;
+  const total = itens.reduce((s, it) => s + (parseFloat(it.valor) || 0), 0);
+  const comissaoPrevia = total * COMISSAO_TAXA + bonus;
+  const entrada = mostraEntrada ? parseFloat(valorEntrada) || 0 : 0;
+  const entradaPassou = entrada - total > 0.004;
+  const dividido = formas.length > 1;
+  const somaPagos = dividido
+    ? FORMAS_PAGAMENTO.reduce((s, f) => s + (parseFloat(valoresPagos[f.id]) || 0), 0)
+    : 0;
+  const pagosPassaram = somaPagos - total > 0.004;
+
+  /** Ao sair de um campo com o outro vazio, completa o outro com o que falta do total:
+   *  venda de 300, digitou 100 no cartão → o Pix já aparece com 200. */
+  function completaOutraForma(id) {
+    const digitado = parseFloat(valoresPagos[id]);
+    if (!(digitado > 0) || !(total > digitado)) return;
+    const outra = FORMAS_PAGAMENTO.find((f) => f.id !== id);
+    if (String(valoresPagos[outra.id]).trim() !== "") return;
+    setValoresPagos((prev) => ({ ...prev, [outra.id]: String(Math.round((total - digitado) * 100) / 100) }));
+  }
+
+  function mudaItem(uid, campo, valor) {
+    setItens((prev) => prev.map((it) => (it.uid === uid ? { ...it, [campo]: valor } : it)));
+  }
+
+  function removeItem(uid) {
+    setItens((prev) => (prev.length > 1 ? prev.filter((it) => it.uid !== uid) : prev));
+    if (criandoCat === uid) cancelarNovaCategoria();
+  }
 
   function cancelarNovaCategoria() {
-    setCriandoCat(false);
+    setCriandoCat(null);
     setNovaCat("");
     setErroCat("");
   }
 
-  /** Salva a categoria no banco e já deixa ela escolhida na venda. */
+  /** Salva a categoria no banco e já deixa ela escolhida no item que pediu. */
   async function salvarNovaCategoria() {
     const nome = novaCat.trim().replace(/\s+/g, " ");
     if (!nome) return;
+    const uid = criandoCat;
 
     const jaExiste = categorias.find((c) => normaliza(c) === normaliza(nome));
     if (jaExiste) {
       // Não trata como erro: só aponta a que já existe e usa ela.
-      setCategoria(jaExiste);
+      mudaItem(uid, "categoria", jaExiste);
       cancelarNovaCategoria();
       return;
     }
@@ -1672,27 +1903,48 @@ function VendaModal({ venda, currentMonth, categorias, onCriarCategoria, onCance
       setErroCat("Não foi possível criar. Tente de novo.");
       return;
     }
-    setCategoria(salva);
+    mudaItem(uid, "categoria", salva);
     cancelarNovaCategoria();
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
     // Com o campo de nova categoria aberto, Enter cria a categoria em vez de salvar a venda.
-    if (criandoCat) return;
-    if (!date || isNaN(value) || value <= 0) return;
+    if (criandoCat !== null) return;
+    const prontos = itens.map((it) => ({
+      // Casa "no-gi" com "No-GI" pra não duplicar a categoria no resumo.
+      category: canonizaCategoria(it.categoria, categorias),
+      description: it.descricao.trim(),
+      value: parseFloat(it.valor),
+    }));
+    if (!date || prontos.some((p) => isNaN(p.value) || p.value <= 0)) return;
     if (bonus < 0) return;
+    // Entrada maior que o total: o aviso já está na tela, embaixo do campo.
+    if (entrada < 0 || entradaPassou) return;
+    // Cartão + Pix somando mais que a venda: o aviso também já está na tela.
+    if (pagosPassaram) return;
     setEnviando(true);
     await onSave({
       date,
-      description: description.trim(),
-      value,
       bonus,
-      // Casa "no-gi" com "No-GI" pra não duplicar a categoria no resumo.
-      category: canonizaCategoria(categoria, categorias),
+      entrada,
+      pagamento: FORMAS_PAGAMENTO.filter((f) => formas.includes(f.id))
+        .map((f) => f.id)
+        .join("+"),
+      // Os valores por forma só valem com as duas marcadas; senão vão zerados.
+      ...Object.fromEntries(
+        FORMAS_PAGAMENTO.map((f) => [f.campo, dividido ? parseFloat(valoresPagos[f.id]) || 0 : 0])
+      ),
+      cliente: mostraCliente ? cliente.trim() : "",
+      telefone: mostraCliente ? telefone.trim() : "",
+      itens: prontos,
     });
     setEnviando(false);
   }
+
+  const rotulo = "block text-xs uppercase tracking-wide text-inkSoft";
+  const campo =
+    "w-full text-base sm:text-sm px-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20";
 
   return (
     <div
@@ -1706,133 +1958,237 @@ function VendaModal({ venda, currentMonth, categorias, onCriarCategoria, onCance
         </h3>
         <form onSubmit={handleSubmit}>
           <div className="mb-3.5">
-            <label className="block text-xs uppercase tracking-wide text-inkSoft mb-1.5">Data</label>
+            <label className={`${rotulo} mb-1.5`}>Data</label>
             <input
               type="date"
               value={date}
               onChange={(e) => setDate(e.target.value)}
               required
-              className="w-full font-mono text-base sm:text-sm px-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
+              className={`${campo} font-mono`}
             />
           </div>
-          <div className="mb-3.5">
-            <div className="flex items-baseline justify-between gap-2 mb-1.5">
-              <label className="block text-xs uppercase tracking-wide text-inkSoft">
-                Categoria (opcional)
-              </label>
-              {!criandoCat && (
+
+          {mostraCliente ? (
+            <div className="mb-3.5 rounded-lg border border-cardBorder bg-white/60 p-3">
+              <div className="flex items-baseline justify-between gap-2 mb-2.5">
+                <span className="font-serif font-semibold text-sm">Cliente</span>
                 <button
                   type="button"
                   onClick={() => {
-                    setCriandoCat(true);
-                    setErroCat("");
+                    setMostraCliente(false);
+                    setCliente("");
+                    setTelefone("");
                   }}
-                  className="text-[11px] font-semibold text-goldDeep hover:underline py-1 px-1 -mr-1"
+                  className="text-[11px] font-semibold text-inkFaint hover:text-redStamp py-1 px-1 -mr-1"
                 >
-                  + Nova categoria
+                  remover
                 </button>
-              )}
-            </div>
-
-            {criandoCat ? (
-              <div className="rounded-lg border border-dashed border-gold bg-[#FDF6E3] p-2.5">
+              </div>
+              <div className="mb-3">
+                <label htmlFor="venda-cliente" className={`${rotulo} mb-1.5`}>
+                  Nome
+                </label>
                 <input
+                  id="venda-cliente"
                   type="text"
-                  value={novaCat}
-                  onChange={(e) => {
-                    setNovaCat(e.target.value);
-                    setErroCat("");
-                  }}
-                  onKeyDown={(e) => {
-                    // Enter aqui cria a categoria; sem isso ele enviaria a venda pela metade.
-                    if (e.key === "Enter") {
-                      e.preventDefault();
-                      salvarNovaCategoria();
-                    }
-                    if (e.key === "Escape") {
-                      e.preventDefault();
-                      cancelarNovaCategoria();
-                    }
-                  }}
-                  placeholder="Nome da nova categoria"
-                  autoFocus
-                  maxLength={60}
-                  className="w-full text-base sm:text-sm px-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
+                  value={cliente}
+                  onChange={(e) => setCliente(e.target.value)}
+                  placeholder="Nome do cliente"
+                  autoComplete="off"
+                  autoFocus={!editando}
+                  maxLength={120}
+                  className={campo}
                 />
-                {erroCat && <p className="text-[11px] text-redStamp mt-1">{erroCat}</p>}
-                <div className="flex gap-2 mt-2">
+              </div>
+              <div>
+                <label htmlFor="venda-telefone" className={`${rotulo} mb-1.5`}>
+                  Telefone
+                </label>
+                <input
+                  id="venda-telefone"
+                  type="tel"
+                  inputMode="tel"
+                  value={telefone}
+                  onChange={(e) => setTelefone(e.target.value)}
+                  placeholder="(00) 00000-0000"
+                  autoComplete="off"
+                  maxLength={40}
+                  className={`${campo} font-mono`}
+                />
+              </div>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setMostraCliente(true)}
+              className="w-full mb-3.5 text-xs font-semibold px-3 py-2.5 min-h-[44px] rounded-lg border border-dashed border-inkFaint text-ink hover:bg-paperStripe"
+            >
+              + Adicionar cliente (nome e telefone)
+            </button>
+          )}
+
+          {itens.map((it, i) => (
+            // Com um item só o formulário fica como sempre foi; a moldura só aparece
+            // quando há mais de um, para separar onde termina um item e começa o outro.
+            <div
+              key={it.uid}
+              className={varios ? "mb-3.5 rounded-lg border border-cardBorder bg-white/60 p-3" : ""}
+            >
+              {varios && (
+                <div className="flex items-baseline justify-between gap-2 mb-2.5">
+                  <span className="font-serif font-semibold text-sm">Item {i + 1}</span>
                   <button
                     type="button"
-                    onClick={salvarNovaCategoria}
-                    disabled={salvandoCat || !novaCat.trim()}
-                    className="flex-1 bg-ink text-paper text-xs font-semibold rounded-lg px-3 py-2 hover:bg-[#142A20] disabled:opacity-50"
+                    onClick={() => removeItem(it.uid)}
+                    className="text-[11px] font-semibold text-inkFaint hover:text-redStamp py-1 px-1 -mr-1"
                   >
-                    {salvandoCat ? "Criando…" : "Criar e usar"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={cancelarNovaCategoria}
-                    className="text-xs font-semibold rounded-lg px-3 py-2 border border-cardBorder bg-white hover:bg-paperStripe"
-                  >
-                    Cancelar
+                    remover
                   </button>
                 </div>
+              )}
+
+              <div className="mb-3.5">
+                <div className="flex items-baseline justify-between gap-2 mb-1.5">
+                  <label className={rotulo}>Categoria (opcional)</label>
+                  {criandoCat === null && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCriandoCat(it.uid);
+                        setErroCat("");
+                      }}
+                      className="text-[11px] font-semibold text-goldDeep hover:underline py-1 px-1 -mr-1"
+                    >
+                      + Nova categoria
+                    </button>
+                  )}
+                </div>
+
+                {criandoCat === it.uid ? (
+                  <div className="rounded-lg border border-dashed border-gold bg-[#FDF6E3] p-2.5">
+                    <input
+                      type="text"
+                      value={novaCat}
+                      onChange={(e) => {
+                        setNovaCat(e.target.value);
+                        setErroCat("");
+                      }}
+                      onKeyDown={(e) => {
+                        // Enter aqui cria a categoria; sem isso ele enviaria a venda pela metade.
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          salvarNovaCategoria();
+                        }
+                        if (e.key === "Escape") {
+                          e.preventDefault();
+                          cancelarNovaCategoria();
+                        }
+                      }}
+                      placeholder="Nome da nova categoria"
+                      autoFocus
+                      maxLength={60}
+                      className={campo}
+                    />
+                    {erroCat && <p className="text-[11px] text-redStamp mt-1">{erroCat}</p>}
+                    <div className="flex gap-2 mt-2">
+                      <button
+                        type="button"
+                        onClick={salvarNovaCategoria}
+                        disabled={salvandoCat || !novaCat.trim()}
+                        className="flex-1 bg-ink text-paper text-xs font-semibold rounded-lg px-3 py-2 hover:bg-[#142A20] disabled:opacity-50"
+                      >
+                        {salvandoCat ? "Criando…" : "Criar e usar"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={cancelarNovaCategoria}
+                        className="text-xs font-semibold rounded-lg px-3 py-2 border border-cardBorder bg-white hover:bg-paperStripe"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  // Categorias como botões: um toque escolhe, outro toque na mesma desmarca
+                  // (a categoria é opcional). Nada de digitar — para uma que não existe,
+                  // o "+ Nova categoria" acima cria e já deixa marcada.
+                  <div role="group" aria-label="Categoria do item" className="flex flex-wrap gap-1.5">
+                    {categorias.length === 0 && (
+                      <p className="text-xs text-inkFaint">
+                        Nenhuma categoria ainda — crie a primeira em "+ Nova categoria".
+                      </p>
+                    )}
+                    {categorias.map((c) => {
+                      const marcada = normaliza(c) === normaliza(it.categoria);
+                      return (
+                        <button
+                          key={c}
+                          type="button"
+                          aria-pressed={marcada}
+                          onClick={() => mudaItem(it.uid, "categoria", marcada ? "" : c)}
+                          className={`text-xs px-3 py-2 min-h-[40px] sm:min-h-0 sm:py-1.5 rounded-lg border transition-colors ${
+                            marcada
+                              ? "bg-ink text-paper border-ink font-semibold"
+                              : "bg-white text-ink border-cardBorder hover:bg-paperStripe hover:border-inkFaint"
+                          }`}
+                        >
+                          {marcada && <span aria-hidden="true">✓ </span>}
+                          {c}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-            ) : (
-              <>
+
+              <div className="mb-3.5">
+                <label className={`${rotulo} mb-1.5`}>Descrição (opcional)</label>
                 <input
                   type="text"
-                  list="lista-categorias"
-                  value={categoria}
-                  onChange={(e) => setCategoria(e.target.value)}
-                  placeholder="Escolha ou digite uma nova"
-                  autoComplete="off"
-                  className="w-full text-base sm:text-sm px-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
+                  value={it.descricao}
+                  onChange={(e) => mudaItem(it.uid, "descricao", e.target.value)}
+                  placeholder="Produto ou observação"
+                  maxLength={300}
+                  className={`${campo} font-mono`}
                 />
-                <datalist id="lista-categorias">
-                  {categorias.map((c) => (
-                    <option key={c} value={c} />
-                  ))}
-                </datalist>
-              </>
-            )}
-          </div>
-          <div className="mb-3.5">
-            <label className="block text-xs uppercase tracking-wide text-inkSoft mb-1.5">Descrição (opcional)</label>
-            <input
-              type="text"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Cliente ou produto"
-              className="w-full font-mono text-base sm:text-sm px-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
-            />
-          </div>
-          <div className="mb-3.5">
-            <label className="block text-xs uppercase tracking-wide text-inkSoft mb-1.5">Valor da venda</label>
-            <div className="relative">
-              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 font-mono text-sm text-inkSoft pointer-events-none">
-                R$
-              </span>
-              <input
-                type="number"
-                min="0.01"
-                step="0.01"
-                inputMode="decimal"
-                value={valor}
-                onChange={(e) => setValor(e.target.value)}
-                placeholder="0,00"
-                required
-                className="w-full font-mono text-base sm:text-sm pl-9 pr-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
-              />
+              </div>
+
+              <div className={varios ? "" : "mb-3.5"}>
+                <label className={`${rotulo} mb-1.5`}>
+                  {varios ? "Valor do item" : "Valor da venda"}
+                </label>
+                <div className="relative">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 font-mono text-sm text-inkSoft pointer-events-none">
+                    R$
+                  </span>
+                  <input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    inputMode="decimal"
+                    value={it.valor}
+                    onChange={(e) => mudaItem(it.uid, "valor", e.target.value)}
+                    placeholder="0,00"
+                    required
+                    className={`${campo} font-mono pl-9`}
+                  />
+                </div>
+              </div>
             </div>
-          </div>
+          ))}
+
+          <button
+            type="button"
+            onClick={() => setItens((prev) => [...prev, novoItemForm()])}
+            className="w-full mb-3.5 text-xs font-semibold px-3 py-2.5 min-h-[44px] rounded-lg border border-dashed border-inkFaint text-ink hover:bg-paperStripe"
+          >
+            + Adicionar outro item
+          </button>
 
           {mostraGorjeta ? (
             <div className="mb-3.5">
               <div className="flex items-baseline justify-between gap-2 mb-1.5">
-                <label className="block text-xs uppercase tracking-wide text-inkSoft">
-                  Gorjeta / comissão extra
-                </label>
+                <label className={rotulo}>Gorjeta / comissão extra</label>
                 <button
                   type="button"
                   onClick={() => {
@@ -1857,7 +2213,7 @@ function VendaModal({ venda, currentMonth, categorias, onCriarCategoria, onCance
                   onChange={(e) => setGorjeta(e.target.value)}
                   placeholder="0,00"
                   autoFocus
-                  className="w-full font-mono text-base sm:text-sm pl-9 pr-2.5 py-2.5 sm:py-2 border border-cardBorder rounded-lg bg-white focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20"
+                  className={`${campo} font-mono pl-9`}
                 />
               </div>
               <p className="text-[11px] text-inkFaint mt-1">
@@ -1874,13 +2230,164 @@ function VendaModal({ venda, currentMonth, categorias, onCriarCategoria, onCance
             </button>
           )}
 
-          <div className="rounded-lg bg-paperStripe border border-cardBorder px-3 py-2 flex items-baseline justify-between">
-            <span className="text-[11px] uppercase tracking-wide text-inkSoft">
-              Comissão desta venda
-            </span>
-            <span className="font-mono text-sm font-semibold text-goldDeep">
-              {fmtMoney(comissaoPrevia)}
-            </span>
+          <div className="mb-3.5">
+            <span className={`${rotulo} mb-1.5`}>Forma de pagamento (opcional)</span>
+            {/* Cada botão liga e desliga sozinho: dá para marcar um, o outro ou os dois juntos. */}
+            <div role="group" aria-label="Forma de pagamento" className="flex gap-1.5">
+              {FORMAS_PAGAMENTO.map((f) => {
+                const marcada = formas.includes(f.id);
+                return (
+                  <button
+                    key={f.id}
+                    type="button"
+                    aria-pressed={marcada}
+                    onClick={() =>
+                      setFormas((prev) =>
+                        marcada ? prev.filter((x) => x !== f.id) : [...prev, f.id]
+                      )
+                    }
+                    className={`flex-1 text-sm px-3 py-2.5 min-h-[44px] sm:min-h-0 sm:py-2 rounded-lg border transition-colors ${
+                      marcada
+                        ? "bg-ink text-paper border-ink font-semibold"
+                        : "bg-white text-ink border-cardBorder hover:bg-paperStripe hover:border-inkFaint"
+                    }`}
+                  >
+                    {marcada && <span aria-hidden="true">✓ </span>}
+                    {f.nome}
+                  </button>
+                );
+              })}
+            </div>
+            {dividido && (
+              <>
+                {/* Um campo embaixo de cada botão: quanto foi naquela forma. */}
+                <div className="flex gap-1.5 mt-1.5">
+                  {FORMAS_PAGAMENTO.map((f) => (
+                    <div key={f.id} className="relative flex-1 min-w-0">
+                      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 font-mono text-sm text-inkSoft pointer-events-none">
+                        R$
+                      </span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        inputMode="decimal"
+                        value={valoresPagos[f.id]}
+                        onChange={(e) =>
+                          setValoresPagos((prev) => ({ ...prev, [f.id]: e.target.value }))
+                        }
+                        onBlur={() => completaOutraForma(f.id)}
+                        placeholder="0,00"
+                        aria-label={`Valor pago no ${f.nome}`}
+                        className={`${campo} font-mono pl-9 ${pagosPassaram ? "border-redStamp" : ""}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+                {pagosPassaram ? (
+                  <p className="text-[11px] text-redStamp mt-1">
+                    Cartão + Pix somam {fmtMoney(somaPagos)}, mais que o total da venda (
+                    {fmtMoney(total)}).
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-inkFaint mt-1">
+                    {somaPagos > 0 && total - somaPagos > 0.004
+                      ? `Soma ${fmtMoney(somaPagos)} de ${fmtMoney(total)} — faltam ${fmtMoney(total - somaPagos)}.`
+                      : "Quanto foi em cada um (opcional). Preencha um e o outro completa sozinho."}
+                  </p>
+                )}
+              </>
+            )}
+          </div>
+
+          {mostraEntrada ? (
+            <div className="mb-3.5">
+              <div className="flex items-baseline justify-between gap-2 mb-1.5">
+                <label htmlFor="venda-entrada" className={rotulo}>
+                  Entrada paga pelo cliente
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMostraEntrada(false);
+                    setValorEntrada("");
+                  }}
+                  className="text-[11px] font-semibold text-inkFaint hover:text-redStamp py-1 px-1 -mr-1"
+                >
+                  remover
+                </button>
+              </div>
+              <div className="relative">
+                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 font-mono text-sm text-inkSoft pointer-events-none">
+                  R$
+                </span>
+                <input
+                  id="venda-entrada"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  inputMode="decimal"
+                  value={valorEntrada}
+                  onChange={(e) => setValorEntrada(e.target.value)}
+                  placeholder="0,00"
+                  autoFocus
+                  className={`${campo} font-mono pl-9 ${entradaPassou ? "border-redStamp" : ""}`}
+                />
+              </div>
+              {entradaPassou ? (
+                <p className="text-[11px] text-redStamp mt-1">
+                  A entrada não pode ser maior que o total da venda ({fmtMoney(total)}).
+                </p>
+              ) : (
+                <p className="text-[11px] text-inkFaint mt-1">
+                  Abate do total para mostrar quanto falta receber. A comissão continua sobre o
+                  valor cheio da venda.
+                </p>
+              )}
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setMostraEntrada(true)}
+              className="w-full mb-3.5 text-xs font-semibold px-3 py-2.5 min-h-[44px] rounded-lg border border-dashed border-inkFaint text-ink hover:bg-paperStripe"
+            >
+              + Adicionar entrada do cliente
+            </button>
+          )}
+
+          <div className="rounded-lg bg-paperStripe border border-cardBorder px-3 py-2">
+            {(varios || entrada > 0) && (
+              <div className="flex items-baseline justify-between mb-1">
+                <span className="text-[11px] uppercase tracking-wide text-inkSoft">
+                  Total da venda{varios ? ` (${itens.length} itens)` : ""}
+                </span>
+                <span className="font-mono text-sm font-semibold">{fmtMoney(total)}</span>
+              </div>
+            )}
+            {entrada > 0 && (
+              <>
+                <div className="flex items-baseline justify-between mb-1">
+                  <span className="text-[11px] uppercase tracking-wide text-inkSoft">Entrada</span>
+                  <span className="font-mono text-sm">− {fmtMoney(entrada)}</span>
+                </div>
+                <div className="flex items-baseline justify-between mb-1.5 pb-1.5 border-b border-cardBorder">
+                  <span className="text-[11px] uppercase tracking-wide text-inkSoft">
+                    Falta receber
+                  </span>
+                  <span className="font-mono text-sm font-semibold">
+                    {fmtMoney(Math.max(0, total - entrada))}
+                  </span>
+                </div>
+              </>
+            )}
+            <div className="flex items-baseline justify-between">
+              <span className="text-[11px] uppercase tracking-wide text-inkSoft">
+                Comissão desta venda
+              </span>
+              <span className="font-mono text-sm font-semibold text-goldDeep">
+                {fmtMoney(comissaoPrevia)}
+              </span>
+            </div>
           </div>
 
           <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 mt-4">
